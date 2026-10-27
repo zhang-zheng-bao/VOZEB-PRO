@@ -13,13 +13,15 @@ export function proxy(request: NextRequest) {
     }
 
     const requestOrigin = publicRequestOrigin(request);
+    const browserSameOrigin = personalModeEnabled() && request.headers.get("sec-fetch-site") === "same-origin";
     const origin = request.headers.get("origin");
-    if (origin && origin !== requestOrigin) return securedJsonResponse({ error: "跨站请求已被拦截" }, 403, contentSecurityPolicy);
+    if (origin && !browserSameOrigin && !isAllowedRequestOrigin(origin, requestOrigin)) return blockedOriginResponse(request, origin, requestOrigin, contentSecurityPolicy);
 
     const referer = request.headers.get("referer");
-    if (referer) {
+    if (referer && !browserSameOrigin) {
         try {
-            if (new URL(referer).origin !== requestOrigin) return securedJsonResponse({ error: "跨站请求已被拦截" }, 403, contentSecurityPolicy);
+            const refererOrigin = new URL(referer).origin;
+            if (!isAllowedRequestOrigin(refererOrigin, requestOrigin)) return blockedOriginResponse(request, refererOrigin, requestOrigin, contentSecurityPolicy);
         } catch {
             return securedJsonResponse({ error: "请求来源无效" }, 403, contentSecurityPolicy);
         }
@@ -42,6 +44,11 @@ function securedJsonResponse(body: unknown, status: number, contentSecurityPolic
     const response = NextResponse.json(body, { status });
     response.headers.set("Content-Security-Policy", contentSecurityPolicy);
     return response;
+}
+
+function blockedOriginResponse(request: NextRequest, source: string, target: string, contentSecurityPolicy: string) {
+    if (personalModeEnabled()) console.warn("[request-origin] blocked", { source, target, secFetchSite: request.headers.get("sec-fetch-site") });
+    return securedJsonResponse({ error: "跨站请求已被拦截" }, 403, contentSecurityPolicy);
 }
 
 function buildContentSecurityPolicy(nonce: string) {
@@ -76,4 +83,35 @@ function publicRequestOrigin(request: NextRequest) {
     } catch {
         return request.nextUrl.origin;
     }
+}
+
+function isAllowedRequestOrigin(source: string, target: string) {
+    if (source === target) return true;
+    if (!personalModeEnabled()) return false;
+    try {
+        const sourceUrl = new URL(source);
+        const targetUrl = new URL(target);
+        const configuredUrl = configuredPersonalOrigin();
+        if (configuredUrl && sourceUrl.origin === configuredUrl.origin) return true;
+        return sourceUrl.protocol === targetUrl.protocol && sourceUrl.port === targetUrl.port && isLoopbackHost(sourceUrl.hostname) && isLoopbackHost(targetUrl.hostname);
+    } catch {
+        return false;
+    }
+}
+
+function configuredPersonalOrigin() {
+    try {
+        const url = new URL(process.env.NEXT_PUBLIC_SITE_URL?.trim() || "");
+        return isLoopbackHost(url.hostname) ? url : null;
+    } catch {
+        return null;
+    }
+}
+
+function personalModeEnabled() {
+    return ["1", "true", "yes", "on"].includes(process.env.VOZEB_PRO_PERSONAL_MODE?.trim().toLowerCase() || "");
+}
+
+function isLoopbackHost(hostname: string) {
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }

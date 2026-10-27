@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isPersonalMode, personalModeUser } from "@/lib/server/personal-mode";
 
 import { inferModelCapability } from "@/lib/model-capability";
 import { lockAuthMutation } from "@/lib/server/auth-mutation-lock";
@@ -687,6 +688,23 @@ export function legacyPointUsageKindFromModel(model: string): PointUsageKind {
 
 export async function consumeUserPoints(userId: string, model: string, amount = 1, usageKind: PointUsageKind = "api", idempotencyKey?: string, requestFingerprint?: string) {
     const normalizedModel = model.trim();
+    if (isPersonalMode()) {
+        const user = personalModeUser();
+        return {
+            model: normalizedModel,
+            units: Math.min(1000, normalizePointAmount(amount, 1)),
+            multiplier: 0,
+            cost: 0,
+            remaining: user.pointsBalance,
+            permanentRemaining: user.permanentPointsBalance,
+            dailyRemaining: user.dailyPointsBalance,
+            dailyExpiresAt: user.dailyPointsExpiresAt,
+            usageKind,
+            planId: user.planId,
+            recordId: idempotencyKey?.trim() || `personal-points:${randomUUID()}`,
+            idempotencyKey: idempotencyKey?.trim() || `personal-points:${randomUUID()}`,
+        };
+    }
     const db = isPostgresDatabaseEnabled() ? null : await readAuthDb();
     const user = db?.users.find((item) => item.id === userId);
     if (db && (!user || user.status !== "active")) throw new AuthInputError("用户不可用");
@@ -722,6 +740,7 @@ export async function consumeUserPoints(userId: string, model: string, amount = 
 }
 
 export async function refundUserPoints(userId: string, model: string, amount: number, usageKind: PointUsageKind = "api", units = 0, idempotencyKey?: string, sourceRecordId?: string) {
+    if (isPersonalMode()) return personalModeUser();
     const refund = normalizePointAmount(amount, 0);
     const sourceId = sourceRecordId?.trim();
     if (isPostgresDatabaseEnabled()) {

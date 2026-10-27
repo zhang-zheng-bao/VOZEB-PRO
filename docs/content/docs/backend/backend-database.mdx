@@ -228,6 +228,6 @@ Chat 规划可以返回 Canvas 或短剧 `projectHandoff`。服务端使用 `han
 
 `app_settings.generation_concurrency` JSONB 同时保存 `agent/image/video/audio/text/render` 六类单用户并发上限；Agent 新建、暂停恢复和失败子任务重试读取后台 `agent` 值，漫剧整集合成读取 `render` 值，不使用代码内固定常量。
 
-后台 Agent Skill 保存在 `app_settings.agent_skills` JSONB 字段中，包含名称、用途、执行规则、启用状态和触发关键词。系统默认内置并启用“电商生图”Skill，管理员可在模型渠道设置页修改、停用、删除或新增 Skill。
+后台 Agent 的三类完整系统提示词保存在 `app_settings.agent_prompts` JSONB 字段中，包含身份、场景规则、工具调用、结构化输出和素材引用协议；`{{FALLBACK_EXAMPLE}}` 在执行时替换为当前规划函数的 JSON 示例。Agent Skill 保存在 `app_settings.agent_skills` JSONB 字段中，包含名称、用途、执行规则、启用状态和触发关键词。系统默认内置并启用“电商生图”Skill，管理员可在模型渠道设置页修改、停用、删除或新增 Skill。
 
 Skill 还可记录 `sourceUrl`、`sourceVersion` 和 `license`。默认电商生图 Skill 来源为 `buluslan/gpt-image2-ecommerce` v0.1.0（MIT），项目仅适配其工作流与模板匹配规则，不使用其 Codex CLI/Shell 执行链。

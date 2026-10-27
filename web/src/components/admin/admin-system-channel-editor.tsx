@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { App, Button, Checkbox, Input, Popconfirm, Select, Switch, Tag, Tooltip } from "antd";
-import { Eye, EyeOff, PlugZap, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { Eye, EyeOff, PlugZap, RefreshCw, Sparkles, Trash2, Upload } from "lucide-react";
 
 import { LabeledControl } from "@/components/admin/admin-settings-controls";
 import { parseChannelExampleConfig } from "@/lib/channel-example-parser";
@@ -13,6 +13,7 @@ import { normalizeModelId } from "@/lib/model-capability";
 import { revealAdminChannelApiKey } from "@/services/api/admin-settings";
 import { AdminChannelProtocolSetup } from "@/components/admin/admin-channel-protocol-setup";
 import { applyModelProtocol, channelProtocolDefinition, channelProtocolOptions, channelRequiresApiKey, channelSupportsModelCatalog, emptyAdvancedConfig } from "@/lib/channel-protocol-registry";
+import { DEFAULT_COMFYUI_WORKFLOW_CONFIG, inferComfyUiWorkflowConfig } from "@/lib/comfyui-workflow";
 
 const protocolOptions = channelProtocolOptions().map(({ value, label }) => ({ value, label }));
 const ALL_GLOBAL_AIOPC_PRESETS = "__all_globalaiopc_presets__";
@@ -241,6 +242,36 @@ export function SystemChannelEditor({ channel, fetching, onChange, onDelete, onF
                                     onChange={applyGlobalAiOpcPresets}
                                 />
                             </LabeledControl>
+                        ) : null}
+                        {advanced.protocol === "comfyui" ? (
+                            <div className="md:col-span-2">
+                                <LabeledControl label="ComfyUI 工作流配置">
+                                    <label className="mb-2 inline-flex cursor-pointer items-center gap-1.5 rounded border border-stone-300 px-2 py-1 text-xs text-stone-700 hover:bg-stone-50 dark:border-stone-700 dark:text-stone-200 dark:hover:bg-stone-900">
+                                        <Upload className="size-3.5" />导入 API 工作流
+                                        <input
+                                            type="file"
+                                            accept=".json,application/json"
+                                            className="sr-only"
+                                            onChange={(event) => {
+                                                const file = event.target.files?.[0];
+                                                if (!file) return;
+                                                void file.text().then((text) => {
+                                                    const config = inferComfyUiWorkflowConfig(JSON.parse(text));
+                                                    updateAdvanced({ comfyuiWorkflow: JSON.stringify(config, null, 2) });
+                                                    message.success("工作流节点已自动匹配，请核对后保存渠道配置");
+                                                }).catch((error) => message.error(error instanceof Error ? error.message : "工作流导入失败"));
+                                                event.target.value = "";
+                                            }}
+                                        />
+                                    </label>
+                                    <Input.TextArea
+                                        value={typeof advanced.comfyuiWorkflow === "string" ? advanced.comfyuiWorkflow : advanced.comfyuiWorkflow ? JSON.stringify(advanced.comfyuiWorkflow, null, 2) : JSON.stringify(DEFAULT_COMFYUI_WORKFLOW_CONFIG, null, 2)}
+                                        rows={8}
+                                        placeholder="粘贴 API 格式工作流配置 JSON；留空时使用内置 MiniMax H3 多参考工作流"
+                                        onChange={(event) => updateAdvanced({ comfyuiWorkflow: event.target.value })}
+                                    />
+                                </LabeledControl>
+                            </div>
                         ) : null}
                         <LabeledControl label="模型目录路径">
                             <Select

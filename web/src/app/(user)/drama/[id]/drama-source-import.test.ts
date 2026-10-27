@@ -14,5 +14,11 @@ describe("drama source import workspace", () => {
         expect(source).toContain("<Pagination");
         expect(source).toContain("overflow-y-auto");
         expect(source).toContain("max-h-[min(68vh,640px)]");
+        expect(source).toContain("onClick={() => setModalOpen(true)}");
+        expect(source).toContain('aria-label="拖入剧本文件或点击选择文件"');
+        expect(source).toContain("event.dataTransfer.files[0]");
+        expect(source).toContain("选择文件");
+        expect(source).toContain("isDramaSourceFile(file)");
+        expect(source).toContain("重置项目资产");
     });
 });

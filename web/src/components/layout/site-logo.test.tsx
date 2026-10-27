@@ -12,10 +12,10 @@ describe("SiteLogo", () => {
         expect(markup).not.toContain("url(/logo.svg)");
     });
 
-    it("keeps the bundled mark as a safe loading fallback", () => {
+    it("uses the 万创核心 mark for legacy bundled-logo settings", () => {
         const markup = renderToStaticMarkup(<SiteLogo logoUrl="/logo.svg" className="size-8" />);
 
-        expect(markup).toContain("url(/logo.svg)");
-        expect(markup).toContain('aria-hidden="true"');
+        expect(markup).toContain('src="/wanchuang-core-logo.png"');
+        expect(markup).toContain('referrerPolicy="no-referrer"');
     });
 });

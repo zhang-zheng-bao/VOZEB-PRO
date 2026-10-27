@@ -11,6 +11,7 @@ import { cancellationExecutionPatch, type GenerationCancellationTarget } from "@
 import { refundVideoTask } from "@/lib/server/video-task-refund";
 import { getStoredGenerationTaskRecord } from "@/lib/server/generation-task-store";
 import { writeVideoGenerationLog } from "@/lib/server/video-task-log";
+import { isPersonalMode } from "@/lib/server/personal-mode";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,6 +23,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     if (!user || !task || (task.userId !== user.id && user.role !== "admin")) return NextResponse.json({ error: "视频任务不存在" }, { status: user ? 404 : 401 });
     const schedule = await getStoredGenerationTaskRecord("video", task.id);
     const executionPhase = schedule?.executionPhase || settledExecutionPhase(task.status);
+    const reviewHidden = isPersonalMode() && executionPhase === "needs_review";
     if (canReconcileVideoTask(task) || (task.status === "cancelled" && (executionPhase === "cancel_requested" || executionPhase === "cancel_polling"))) {
         const origin = resolveInternalOrigin(new URL(request.url).origin);
         const cookie = request.headers.get("cookie") || "";
@@ -31,7 +33,17 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const settledTask = shouldRefund ? await refundVideoTask(task) : task;
     const refreshedUser = shouldRefund ? await getCurrentUser(request) : user;
     return NextResponse.json(
-        { task: { ...publicTask(settledTask), needsReview: executionPhase === "needs_review", reviewReason: executionPhase === "needs_review" ? schedule?.resultPayload?.reviewReason || task.reviewReason : undefined, executionPhase } },
+        {
+            task: {
+                ...publicTask(settledTask),
+                status: reviewHidden ? "error" : settledTask.status,
+                error: reviewHidden ? schedule?.resultPayload?.reviewReason || task.reviewReason || "生成状态不确定，请重新生成" : settledTask.error,
+                canRetry: reviewHidden || settledTask.retryable === true,
+                needsReview: false,
+                reviewReason: undefined,
+                executionPhase: reviewHidden ? "completed" : executionPhase,
+            },
+        },
         { headers: pointsResponseHeaders(refreshedUser) },
     );
 }

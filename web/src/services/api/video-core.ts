@@ -8,6 +8,7 @@ import { GENERATION_TASK_NEEDS_REVIEW_MESSAGE, GenerationTaskNeedsReviewError, t
 import { GenerationTaskRequestError } from "@/services/api/generation-task-request-error";
 import { imageToDataUrl } from "@/services/image-storage";
 import { refreshUserPointsIfSystem, syncUserPointsFromHeaders } from "@/services/api/points";
+import { requestRunningHubBalanceRefresh } from "@/services/api/runninghub-balance";
 import { throwIfClientSessionExpired } from "@/services/api/session-expiration";
 import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
 import { buildApiUrl, modelOptionName, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
@@ -115,16 +116,19 @@ export async function waitForVideoGenerationTask(config: AiConfig, task: VideoGe
         const state = await pollVideoGenerationTask(config, task, options);
         if (state.status === "completed") {
             await refreshUserPointsIfSystem(resolveModelRequestConfig(config, task.model).apiSource);
+            requestRunningHubBalanceRefresh();
             return state.result;
         }
         if (state.status === "failed") {
             await refreshUserPointsIfSystem(resolveModelRequestConfig(config, task.model).apiSource);
+            requestRunningHubBalanceRefresh();
             if (state.needsReview) throw new GenerationTaskNeedsReviewError(state.error);
             throw new VideoGenerationUpstreamError(state.error, state.canRetry !== false);
         }
         await delay(delayMs, options?.signal);
     }
     await refreshUserPointsIfSystem(resolveModelRequestConfig(config, task.model).apiSource);
+    requestRunningHubBalanceRefresh();
     throw new VideoGenerationWaitTimeoutError();
 }
 
@@ -160,6 +164,7 @@ export async function createServerVideoGenerationTask(
                 size: requestConfig.size,
                 vquality: requestConfig.vquality,
                 videoSeconds: requestConfig.videoSeconds,
+                comfyuiMode: requestConfig.comfyuiMode,
                 videoGenerateAudio: requestConfig.videoGenerateAudio,
                 videoWatermark: requestConfig.videoWatermark,
             },
@@ -174,6 +179,7 @@ export async function createServerVideoGenerationTask(
     const payload = (await response.json().catch(() => ({}))) as { task?: { id?: string; model?: string; durationSeconds?: number }; error?: string; canRetry?: boolean };
     if (!response.ok) throw new GenerationTaskRequestError(payload.error || "后台视频任务创建失败", response.status, payload.canRetry === true);
     if (!payload.task?.id) throw new Error(payload.error || "后台视频任务创建失败");
+    requestRunningHubBalanceRefresh();
     return { id: payload.task.id, provider: "generation", model: payload.task.model || selectedModel, pollPath: "server", serverTaskId: payload.task.id, durationSeconds: payload.task.durationSeconds };
 }
 

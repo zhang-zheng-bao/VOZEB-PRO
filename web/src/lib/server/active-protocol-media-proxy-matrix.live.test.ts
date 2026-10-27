@@ -147,7 +147,7 @@ describe("active protocols through persisted admin settings and the system proxy
             `image-video-${definition.id}`,
         );
         await expectVideoResult(channel, referenced);
-        expectProxyRequests(channel, createPath, model, true, operation.queryPath, referenced.id);
+        expectProxyRequests(channel, createPath, model, operation.supportsReferenceImage === true, operation.queryPath, referenced.id);
     });
 
     it.each(AUDIO_PROTOCOLS)("persists and routes $id audio requests and returned media", async (definition) => {
@@ -290,6 +290,7 @@ async function configureProxyChannel(definition: ChannelProtocolDefinition, capa
             baseUrl: `/api/ai/system/${encodeURIComponent(channelId)}`,
             apiKey: "system" as const,
             apiFormat: definition.apiFormat,
+            providerBaseUrl: upstreamBaseUrl,
             model,
             logicalModel: logicalModelId,
             channelId,
@@ -308,7 +309,7 @@ type ProxyChannel = {
 };
 
 function fixtureBaseUrl(protocol: SystemChannelProtocol, apiFormat: "openai" | "gemini") {
-    if (["custom", "stable-diffusion", "yumeng", "seedance-special"].includes(protocol)) return fixtureOrigin;
+    if (["custom", "stable-diffusion", "yumeng", "seedance-special", "runninghub", "comfyui"].includes(protocol)) return fixtureOrigin;
     return `${fixtureOrigin}/${apiFormat === "gemini" ? "v1beta" : "v1"}`;
 }
 
@@ -378,18 +379,31 @@ async function expectVideoResult(channel: ProxyChannel, upstream: VideoTask["ups
 function expectProxyRequests(channel: ProxyChannel, createPath: string | undefined, model: string, referenceRequired: boolean, queryPath?: string, taskId?: string) {
     if (!createPath) throw new Error("Protocol operation is missing createPath");
     const createRequests = fixture.requests.filter((request) => request.method === "POST");
-    expect(createRequests).toHaveLength(1);
-    const request = createRequests[0]!;
+    const expectedCreatePath = upstreamPath(channel.upstreamBaseUrl, createPath.replace(":model", model));
+    const request = createRequests.find((request) => request.path === expectedCreatePath);
+    expect(request).toBeTruthy();
+    if (!request) throw new Error(`Protocol create request not found: ${expectedCreatePath}`);
     const body = request.body.toString(request.contentType.includes("multipart/form-data") ? "latin1" : "utf8");
-    expect(request.path).toBe(upstreamPath(channel.upstreamBaseUrl, createPath.replace(":model", model)));
     expect(request.body.byteLength).toBeGreaterThan(0);
-    expect(decodeURIComponent(request.path).includes(model) || body.includes(model)).toBe(true);
-    expect(request.headers["idempotency-key"]).toBeTruthy();
-    expect(request.headers["x-client-request-id"]).toBeTruthy();
+    if (!["comfyui", "runninghub"].includes(channel.config.advancedConfig?.protocol || "")) expect(decodeURIComponent(request.path).includes(model) || body.includes(model)).toBe(true);
+    if (channel.config.advancedConfig?.protocol !== "comfyui") {
+        expect(request.headers["idempotency-key"]).toBeTruthy();
+        expect(request.headers["x-client-request-id"]).toBeTruthy();
+    }
     Object.entries(channel.expectedAuthHeaders).forEach(([key, value]) => expect(request.headers[key.toLowerCase()]).toBe(value));
-    expect(requestContainsReference(request)).toBe(referenceRequired);
-    if (queryPath && taskId) expect(fixture.requests.some((request) => request.method === "GET" && request.path === upstreamPath(channel.upstreamBaseUrl, queryPath.replace(":model", model).replace(":task_id", taskId)))).toBe(true);
-    expect(mocks.consumeUserPoints).toHaveBeenCalled();
+    expect(requestContainsReference(request) || createRequests.some(requestContainsReference)).toBe(referenceRequired);
+    if (queryPath && taskId && channel.config.advancedConfig?.protocol === "runninghub") {
+        expect(fixture.requests.some((request) => request.method === "POST" && request.path === upstreamPath(channel.upstreamBaseUrl, "/openapi/v2/query"))).toBe(true);
+    } else if (queryPath && taskId) {
+        expect(
+            fixture.requests.some(
+                (request) =>
+                    request.method === "GET" &&
+                    request.path === upstreamPath(channel.upstreamBaseUrl, queryPath.replace(":model", model).replace(":task_id", taskId).replace(":id", taskId.replace(/^prompt:/, ""))),
+            ),
+        ).toBe(true);
+    }
+    if (channel.config.advancedConfig?.protocol !== "comfyui") expect(mocks.consumeUserPoints).toHaveBeenCalled();
 }
 
 function upstreamPath(baseUrl: string, path: string) {
@@ -402,7 +416,7 @@ function upstreamPath(baseUrl: string, path: string) {
 
 function requestContainsReference(request: (typeof fixture.requests)[number] | undefined) {
     const body = request?.body.toString(request.contentType.includes("multipart/form-data") ? "latin1" : "utf8") || "";
-    return /reference\.png|fixture\.png|iVBOR|input_reference|reference_images|image_urls|inlineData|image_url|"images"\s*:\s*\[\s*"http|"image"\s*:\s*\{/.test(body);
+    return /vozeb-[a-f0-9]{64}\.png|reference\.png|fixture\.png|iVBOR|input_reference|reference_images|image_urls|imageUrl|inlineData|image_url|"images"\s*:\s*\[\s*"http|"image"\s*:\s*\{/.test(body);
 }
 
 async function dispatchInternalRequest(input: string | URL | Request, init?: RequestInit) {

@@ -24,7 +24,7 @@ type DramaStore = {
     loadProject: (id: string, force?: boolean) => Promise<DramaProject>;
     createProject: (input: CreateDramaProjectInput) => Promise<string>;
     deleteProject: (id: string) => Promise<void>;
-    updateProject: (id: string, patch: Partial<Pick<DramaProject, "title" | "summary" | "style" | "ratio" | "status" | "creativeConversationId" | "defaultVideoMode">>) => void;
+    updateProject: (id: string, patch: Partial<Pick<DramaProject, "title" | "summary" | "style" | "visualStylePresetId" | "visualStylePrompt" | "promptTemplates" | "assetImageModels" | "storyboardImageModel" | "ratio" | "status" | "creativeConversationId" | "defaultVideoMode">>) => void;
     addCharacter: (projectId: string, input: Omit<DramaCharacter, "id">) => void;
     addScene: (projectId: string, input: Omit<DramaScene, "id">) => void;
     addProp: (projectId: string, input: Omit<DramaProp, "id">) => void;
@@ -232,7 +232,17 @@ export const useDramaStore = create<DramaStore>((set, get) => ({
                 reviewStatus: "draft",
                 shots: [],
             }));
-            return episodes.length ? { ...project, activeEpisodeId: episodes[0].id, episodes } : project;
+            return episodes.length
+                ? {
+                      ...project,
+                      activeEpisodeId: episodes[0].id,
+                      characters: [],
+                      scenes: [],
+                      props: [],
+                      clues: [],
+                      episodes,
+                  }
+                : project;
         }),
     deleteEpisode: (projectId, episodeId) =>
         mutateProject(projectId, (project) => {

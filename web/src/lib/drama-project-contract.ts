@@ -3,6 +3,13 @@ export type DramaReviewStatus = "draft" | "content_review" | "approved" | "visua
 export type DramaVideoMode = "storyboard" | "direct" | "reference";
 export type DramaStoryboardFrameMode = "single" | "first_last";
 export type DramaShotAudioMode = "source" | "voiceover" | "mute";
+export type DramaPromptTemplateKind = "character" | "scene" | "prop" | "storyboard" | "video";
+
+export type DramaPromptTemplateSelection = {
+    id: string;
+    title: string;
+    prompt: string;
+};
 
 export type DramaAssetReference = {
     id: string;
@@ -167,6 +174,11 @@ export type DramaProject = {
     title: string;
     summary: string;
     style: string;
+    visualStylePresetId?: string;
+    visualStylePrompt?: string;
+    promptTemplates?: Partial<Record<DramaPromptTemplateKind, DramaPromptTemplateSelection>>;
+    assetImageModels?: Partial<Record<"character" | "scene" | "prop", string>>;
+    storyboardImageModel?: string;
     ratio: string;
     status: "active" | "archived";
     creativeConversationId?: string;

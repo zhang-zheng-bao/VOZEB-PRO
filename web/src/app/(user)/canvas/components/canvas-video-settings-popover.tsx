@@ -15,6 +15,10 @@ import type { CanvasResourceReference } from "../utils/canvas-resource-reference
 import { canvasVideoReferenceModeLabel, normalizeCanvasVideoReferenceMode } from "../utils/canvas-video-references";
 import { CanvasVideoReferenceSettings } from "./canvas-video-reference-settings";
 
+function isComfyUiModel(model: string) {
+    return model.toLowerCase().includes("comfyui") || model === "minimax-h3-multi-reference";
+}
+
 type CanvasVideoSettingsPopoverProps = {
     config: AiConfig;
     metadata?: CanvasNodeMetadata;
@@ -28,6 +32,7 @@ type CanvasVideoSettingsPopoverProps = {
 export function CanvasVideoSettingsPopover({ config, metadata, references, onConfigChange, onMetadataChange, buttonClassName, placement = "topLeft" }: CanvasVideoSettingsPopoverProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const responsivePlacement = useCreativeComposerPopoverPlacement(placement);
+    const isComfyUi = isComfyUiModel(config.model);
     const preferences: GenerationPreferences = {
         mode: "video",
         video: {
@@ -37,44 +42,53 @@ export function CanvasVideoSettingsPopover({ config, metadata, references, onCon
             generateAudio: boolConfig(config.videoGenerateAudio, true),
             watermark: boolConfig(config.videoWatermark, false),
             referenceMode: normalizeCanvasVideoReferenceMode(metadata?.videoReferenceMode),
+            comfyuiMode: String(metadata?.comfyuiMode || "balanced"),
         },
     };
-    const summary = canvasVideoPreferenceSummary(preferences);
+    const summary = canvasVideoPreferenceSummary(preferences, isComfyUi);
     const fullSummary = generationPreferenceSummary("video", preferences);
     const referenceLabel = canvasVideoReferenceModeLabel(metadata?.videoReferenceMode);
 
     return (
-        <CreativeGenerationPreferences
-            capability="video"
-            preferences={preferences}
-            triggerLabel={summary}
-            triggerAriaLabel={`视频设置：${referenceLabel} · ${fullSummary}`}
-            triggerIcon={<SlidersHorizontal className="size-4" />}
-            triggerClassName={buttonClassName}
-            triggerLabelClassName="whitespace-nowrap text-left !overflow-visible !text-clip"
-            placement={responsivePlacement}
-            autoAdjustOverflow
-            showCount={false}
-            videoReferenceContent={<CanvasVideoReferenceSettings metadata={metadata} references={references} theme={theme} compact onChange={onMetadataChange} />}
-            onChange={(patch) => applyVideoPreferencePatch(patch, onConfigChange)}
-        />
+        <>
+            <CreativeGenerationPreferences
+                capability="video"
+                preferences={preferences}
+                triggerLabel={summary}
+                triggerAriaLabel={`视频设置：${referenceLabel} · ${fullSummary}`}
+                triggerIcon={<SlidersHorizontal className="size-4" />}
+                triggerClassName={buttonClassName}
+                triggerLabelClassName="whitespace-nowrap text-left !overflow-visible !text-clip"
+                placement={responsivePlacement}
+                autoAdjustOverflow
+                showCount={false}
+                showComfyUiMode={isComfyUi}
+                videoReferenceContent={<CanvasVideoReferenceSettings metadata={metadata} references={references} theme={theme} compact onChange={onMetadataChange} />}
+                onChange={(patch) => applyVideoPreferencePatch(patch, onConfigChange, onMetadataChange)}
+            />
+        </>
     );
 }
 
-export function canvasVideoPreferenceSummary(preferences: GenerationPreferences) {
+export function canvasVideoPreferenceSummary(preferences: GenerationPreferences, isComfyUi = false) {
     const video = preferences.video;
+    if (isComfyUi) {
+        const mode = video?.comfyuiMode === "fast" ? "快速" : video?.comfyuiMode === "quality" ? "高质量" : "均衡";
+        return `${mode} · ${video?.seconds || 5}秒`;
+    }
     const size = !video?.size || video.size === "auto" ? "智能" : video.size.replace("x", "×");
     if (/^\d+x\d+$/i.test(video?.size || "")) return size;
     const quality = !video?.quality || video.quality === "auto" ? "智能" : `${video.quality.replace(/p$/i, "")}P`;
     return `${size} · ${quality}`;
 }
 
-function applyVideoPreferencePatch(patch: CreativeGenerationPreferencePatch, onChange: (key: keyof AiConfig, value: string) => void) {
+function applyVideoPreferencePatch(patch: CreativeGenerationPreferencePatch, onChange: (key: keyof AiConfig, value: string) => void, onMetadataChange: (patch: Partial<CanvasNodeMetadata>) => void) {
     if (patch.size !== undefined) onChange("size", patch.size);
     if (patch.quality !== undefined) onChange("vquality", patch.quality);
     if (patch.seconds !== undefined) onChange("videoSeconds", String(patch.seconds));
     if (patch.generateAudio !== undefined) onChange("videoGenerateAudio", String(patch.generateAudio));
     if (patch.watermark !== undefined) onChange("videoWatermark", String(patch.watermark));
+    if (patch.comfyuiMode !== undefined) onMetadataChange({ comfyuiMode: patch.comfyuiMode });
 }
 
 function positiveInteger(value: unknown, fallback: number) {

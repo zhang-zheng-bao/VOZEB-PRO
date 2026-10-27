@@ -318,12 +318,25 @@ export default function CreatePage() {
     };
 
     const toggleModel = (model: (typeof modelOptions)[number]) => {
-        setSelectedModelIds((current) => {
-            const next = current.includes(model.id) ? current.filter((id) => id !== model.id) : [...current, model.id];
-            setSmartPlanning(next.length === 0);
-            return next;
-        });
+        const selected = selectedModelIds.includes(model.id);
+        const next = selected ? selectedModelIds.filter((id) => id !== model.id) : [...selectedModelIds, model.id];
+        setSelectedModelIds(next);
+        setSmartPlanning(next.length === 0);
+        if (!selected) syncVideoReferenceModeForSelectedModel(model);
         window.requestAnimationFrame(() => inputRef.current?.focus());
+    };
+
+    const syncVideoReferenceModeForSelectedModel = (model: (typeof modelOptions)[number]) => {
+        if (model.capability !== "video") return;
+        const mode = videoReferenceModeForModel(model);
+        if (!mode) return;
+        setGenerationPreferences((current) => {
+            const activePreferences = applyAgentGenerationCapability(creationMode, "video", current);
+            const video = activePreferences.video || {};
+            if (mode === "reference") return { ...activePreferences, video: { ...video, referenceMode: "reference", firstFrameAssetId: undefined, lastFrameAssetId: undefined } };
+            if (mode === "first_frame") return { ...activePreferences, video: { ...video, referenceMode: "first_frame", lastFrameAssetId: undefined } };
+            return activePreferences;
+        });
     };
 
     const changeCreationMode = (mode: "agent" | CreativeGenerationMode) => {
@@ -756,3 +769,10 @@ function skillVisual(skill: AgentSkillSummary, index: number) {
 }
 
 type FrameRole = Extract<VideoReferenceRole, "first_frame" | "last_frame">;
+
+function videoReferenceModeForModel(model: { id: string; name: string }) {
+    const name = `${model.id} ${model.name}`.toLowerCase();
+    if (name.includes("reference-to-video") || name.includes("multimodal") || name.includes("fl2v") || name.includes("all-reference") || name.includes("多模态参考") || name.includes("全能参考")) return "reference";
+    if (name.includes("image-to-video") || name.includes("i2v")) return "first_frame";
+    return "";
+}

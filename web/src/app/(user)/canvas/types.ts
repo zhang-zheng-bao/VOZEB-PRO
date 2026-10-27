@@ -121,6 +121,7 @@ export type CanvasNodeMetadata = {
     generateAudio?: string;
     watermark?: string;
     videoReferenceMode?: CreativeVideoReferenceMode;
+    comfyuiMode?: string;
     videoFirstFrame?: CanvasVideoFrameSelection;
     videoLastFrame?: CanvasVideoFrameSelection;
     videoReferences?: CanvasVideoReferenceSnapshot[];

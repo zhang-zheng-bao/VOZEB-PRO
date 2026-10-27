@@ -116,7 +116,7 @@ describe("Canvas Agent current-turn references", () => {
         expect(imageSettings).toContain("canvasImagePreferenceSummary(preferences, fixedSizeLabel)");
         expect(imageSettings).toContain('triggerLabelClassName="whitespace-nowrap text-left !overflow-visible !text-clip"');
         expect(imageSettings).toContain('count > 1 ? ` · ${count}张` : ""');
-        expect(videoSettings).toContain("canvasVideoPreferenceSummary(preferences)");
+        expect(videoSettings).toContain("canvasVideoPreferenceSummary(preferences, isComfyUi)");
         expect(videoSettings).toContain('triggerLabelClassName="whitespace-nowrap text-left !overflow-visible !text-clip"');
     });
 

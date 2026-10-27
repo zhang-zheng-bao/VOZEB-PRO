@@ -194,6 +194,15 @@ export async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
     return Promise.all(nodes.map((node) => hydrateCanvasNode(node).catch(() => node)));
 }
 
+export function normalizeRestoredCanvasNodeState(node: CanvasNodeData) {
+    if (node.type === CanvasNodeType.Video && node.metadata?.status === "error" && node.metadata.videoTask) {
+        return { ...node, metadata: { ...node.metadata, status: "loading" as const, errorDetails: undefined } };
+    }
+    if (node.metadata?.status !== "needs_review") return node;
+    const { errorDetails, imageTask, videoTask, textTask, audioTask, ...metadata } = node.metadata;
+    return { ...node, metadata: { ...metadata, status: "idle" as const } };
+}
+
 async function hydrateCanvasNode(node: CanvasNodeData) {
     const content = node.metadata?.content;
     const fallbackContent = generatedContentFallback(content, node.metadata?.remoteUrl, node.metadata?.serverUrl);

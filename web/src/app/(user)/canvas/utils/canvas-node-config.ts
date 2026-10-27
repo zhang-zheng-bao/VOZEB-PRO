@@ -1,4 +1,5 @@
-import { defaultConfig, modelOptionName, selectableModelsByCapability, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, modelOptionName, resolveModelRequestConfig, selectableModelsByCapability, type AiConfig } from "@/stores/use-config-store";
+import { inferVideoModelFeatures } from "@/lib/video-model-classification";
 import type { CanvasAudioSettingKey } from "../components/canvas-audio-settings-popover";
 import type { CanvasGenerationMode, CanvasNodeData } from "../types";
 
@@ -9,6 +10,7 @@ export function buildCanvasNodeConfig(globalConfig: AiConfig, node: CanvasNodeDa
         quality: node.metadata?.quality || globalConfig.quality || defaultConfig.quality,
         size: node.metadata?.size || globalConfig.size || defaultConfig.size,
         videoSeconds: node.metadata?.seconds || globalConfig.videoSeconds || defaultConfig.videoSeconds,
+        comfyuiMode: node.metadata?.comfyuiMode,
         vquality: node.metadata?.vquality || globalConfig.vquality || defaultConfig.vquality,
         videoGenerateAudio: node.metadata?.generateAudio || globalConfig.videoGenerateAudio || defaultConfig.videoGenerateAudio,
         videoWatermark: node.metadata?.watermark || globalConfig.videoWatermark || defaultConfig.videoWatermark,
@@ -26,6 +28,27 @@ export function resolveCanvasGenerationModel(config: AiConfig, mode: CanvasGener
     if (current) return current;
     const preferred = mode === "image" ? config.imageModel : mode === "video" ? config.videoModel : mode === "audio" ? config.audioModel : config.textModel;
     return findModelOption(models, preferred) || models[0] || "";
+}
+
+export function canvasVideoModelReferenceMode(model: string, config?: AiConfig) {
+    const requestConfig = config ? resolveModelRequestConfig(config, model) : undefined;
+    const logical = config?.logicalModels.find((item) => item.id.toLowerCase() === model.toLowerCase());
+    const profile = logical?.bindings.find((binding) => binding.enabled)?.capabilityProfile;
+    const mode = inferVideoModelFeatures({
+        model: modelOptionName(model),
+        label: logical?.name || model,
+        template: requestConfig?.advancedConfig?.requestTemplate,
+        createPath: requestConfig?.advancedConfig?.createPath,
+        imageToVideoPath: requestConfig?.advancedConfig?.imageToVideoPath,
+        durationRange: requestConfig?.advancedConfig?.durationRange,
+        supportsReferenceImage: requestConfig?.advancedConfig?.supportsReferenceImage || profile?.supportsReferenceImage,
+        supportsReferenceVideo: requestConfig?.advancedConfig?.supportsReferenceVideo || profile?.supportsReferenceVideo,
+        supportsReferenceAudio: requestConfig?.advancedConfig?.supportsReferenceAudio || profile?.supportsReferenceAudio,
+        maxReferenceImages: profile?.maxReferenceImages,
+        minDurationSeconds: profile?.minDurationSeconds,
+        maxDurationSeconds: profile?.maxDurationSeconds,
+    }).mode;
+    return mode;
 }
 
 function findModelOption(options: string[], value: string) {

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 
 import { getInstallStatus } from "@/lib/server/install-status";
+import { isPersonalMode } from "@/lib/server/personal-mode";
 import { getPublicSiteSettings } from "@/lib/server/site-metadata";
 import { HomeActionsProvider } from "./home/home-actions";
 import { HomeAgentHero } from "./home/home-agent-hero";
@@ -13,6 +14,7 @@ import styles from "./home/home.module.css";
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
+    if (isPersonalMode()) redirect("/create");
     const [install, site] = await Promise.all([getInstallStatus(), getPublicSiteSettings()]);
     if (!install.ready) redirect("/install");
 

@@ -27,6 +27,7 @@ export type CreativeGenerationPreferencePatch = {
     voice?: string;
     format?: string;
     speed?: number;
+    comfyuiMode?: string;
 };
 
 const imageRatios = [
@@ -82,6 +83,12 @@ const videoReferenceModeOptions = [
     { value: "first_last", label: "首尾帧" },
 ] as const;
 
+const comfyuiModeOptions = [
+    { value: "fast", label: "快速", shortLabel: "快速" },
+    { value: "balanced", label: "均衡", shortLabel: "均衡" },
+    { value: "quality", label: "高质量", shortLabel: "高质量" },
+] as const;
+
 export function CreativeGenerationPreferences({
     capability,
     capabilities = [capability],
@@ -97,6 +104,7 @@ export function CreativeGenerationPreferences({
     fixedSizeLabel,
     compact = false,
     showCount = true,
+    showComfyUiMode,
     videoReferenceContent,
     onOpenChange,
     onCapabilityChange,
@@ -116,6 +124,7 @@ export function CreativeGenerationPreferences({
     fixedSizeLabel?: string;
     compact?: boolean;
     showCount?: boolean;
+    showComfyUiMode?: boolean;
     videoReferenceContent?: ReactNode;
     onOpenChange?: (open: boolean) => void;
     onCapabilityChange?: (capability: MediaCapability) => void;
@@ -201,7 +210,7 @@ export function CreativeGenerationPreferences({
                             ))}
                         </div>
                     ) : null}
-                    <PreferencePanel capability={activeCapability} preferences={preferences} fixedSizeLabel={fixedSizeLabel} compact={compact} showCount={showCount} videoReferenceContent={videoReferenceContent} onChange={onChange} />
+                    <PreferencePanel capability={activeCapability} preferences={preferences} fixedSizeLabel={fixedSizeLabel} compact={compact} showCount={showCount} showComfyUiMode={showComfyUiMode} videoReferenceContent={videoReferenceContent} onChange={onChange} />
                 </div>
             }
         >
@@ -227,6 +236,7 @@ function PreferencePanel({
     fixedSizeLabel,
     compact,
     showCount,
+    showComfyUiMode,
     videoReferenceContent,
     onChange,
 }: {
@@ -235,6 +245,7 @@ function PreferencePanel({
     fixedSizeLabel?: string;
     compact: boolean;
     showCount: boolean;
+    showComfyUiMode?: boolean;
     videoReferenceContent?: ReactNode;
     onChange: (patch: CreativeGenerationPreferencePatch) => void;
 }) {
@@ -355,7 +366,13 @@ function PreferencePanel({
             ) : (
                 <div className="grid gap-2.5">
                     {capability === "video" ? (
-                        <VideoQualityField value={selectedQuality} options={videoQualityOptions} onChange={(quality) => onChange({ quality })} />
+                        <>
+                            {showComfyUiMode ? (
+                                <CompactOptionGroup label="生成模式" ariaLabel="选择 ComfyUI 生成模式" value={preferences.video?.comfyuiMode || "balanced"} options={comfyuiModeOptions} columns={3} onChange={(comfyuiMode) => onChange({ comfyuiMode })} />
+                            ) : (
+                                <VideoQualityField value={selectedQuality} options={videoQualityOptions} onChange={(quality) => onChange({ quality })} />
+                            )}
+                        </>
                     ) : (
                         <CompactOptionGroup label="画质" ariaLabel="选择图片画质" value={selectedQuality} options={imageQualityOptions} onChange={(quality) => onChange({ quality })} />
                     )}
@@ -363,10 +380,12 @@ function PreferencePanel({
                     {capability === "video" ? (
                         <>
                             <SuggestedPositiveIntegerField label="时长" ariaLabel="输入视频时长" value={preferences.video?.seconds || 5} suffix="秒" options={videoDurationOptions} onChange={(seconds) => onChange({ seconds })} />
-                            <div className="grid grid-cols-2 gap-1.5 rounded-xl border border-[#e3e8ec] bg-[#fafbfc] p-2 dark:border-[#343b44] dark:bg-[#1f242a]">
-                                <SwitchPreference label="生成声音" checked={preferences.video?.generateAudio ?? true} onChange={(generateAudio) => onChange({ generateAudio })} />
-                                <SwitchPreference label="添加水印" checked={preferences.video?.watermark ?? false} onChange={(watermark) => onChange({ watermark })} />
-                            </div>
+                            {!showComfyUiMode ? (
+                                <div className="grid grid-cols-2 gap-1.5 rounded-xl border border-[#e3e8ec] bg-[#fafbfc] p-2 dark:border-[#343b44] dark:bg-[#1f242a]">
+                                    <SwitchPreference label="生成声音" checked={preferences.video?.generateAudio ?? true} onChange={(generateAudio) => onChange({ generateAudio })} />
+                                    <SwitchPreference label="添加水印" checked={preferences.video?.watermark ?? false} onChange={(watermark) => onChange({ watermark })} />
+                                </div>
+                            ) : null}
                         </>
                     ) : null}
                 </div>

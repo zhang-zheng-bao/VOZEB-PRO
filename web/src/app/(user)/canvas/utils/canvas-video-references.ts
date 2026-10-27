@@ -236,7 +236,7 @@ function snapshotVideoReferences(images: ReferenceImage[], videos: ReferenceVide
 }
 
 function resolveFrameImage(selection: CanvasVideoFrameSelection | undefined, images: ReferenceImage[]) {
-    if (!selection) return undefined;
+    if (!selection) return images[0];
     const current = images.find((image) => (selection.nodeId && image.id === selection.nodeId) || sameSource(selection.source, stableImageSource(image)));
     if (current) return current;
     const previewUrl = persistedSource(selection.serverUrl, selection.remoteUrl, selection.previewUrl);
@@ -318,7 +318,7 @@ function persistedSource(...values: Array<string | undefined>) {
 }
 
 function isStorageKey(value: string) {
-    return /^(?:image|media):/.test(value);
+    return /^(?:temporary|permanent)\//.test(value) || /^(?:image|media):/.test(value);
 }
 
 function isDirectUrl(value: string) {

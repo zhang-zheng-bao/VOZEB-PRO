@@ -74,6 +74,39 @@ describe("Canvas video references", () => {
         expect(restored?.snapshots).toEqual(metadata.videoReferences);
     });
 
+    it("restores ordinary persisted reference snapshots from permanent storage keys", () => {
+        const metadata: CanvasNodeMetadata = {
+            videoReferenceMode: "reference",
+            videoReferences: [
+                snapshot("image-one", "reference", "permanent/2026/08/16/images/reference.png"),
+                {
+                    type: "video",
+                    role: "reference",
+                    id: "video-one",
+                    name: "video-one.mp4",
+                    mimeType: "video/mp4",
+                    source: "permanent/2026/08/16/videos/reference.mp4",
+                    storageKey: "permanent/2026/08/16/videos/reference.mp4",
+                },
+                {
+                    type: "audio",
+                    role: "reference",
+                    id: "audio-one",
+                    name: "audio-one.mp3",
+                    mimeType: "audio/mpeg",
+                    source: "permanent/2026/08/16/audios/reference.mp3",
+                    storageKey: "permanent/2026/08/16/audios/reference.mp3",
+                },
+            ],
+        };
+
+        const restored = restoreCanvasVideoGenerationReferences(metadata);
+
+        expect(restored?.images[0]).toMatchObject({ id: "image-one", storageKey: "permanent/2026/08/16/images/reference.png", videoRole: "reference" });
+        expect(restored?.videos[0]).toMatchObject({ id: "video-one", storageKey: "permanent/2026/08/16/videos/reference.mp4" });
+        expect(restored?.audios[0]).toMatchObject({ id: "audio-one", storageKey: "permanent/2026/08/16/audios/reference.mp3" });
+    });
+
     it("rejects an incomplete persisted first-last-frame snapshot", () => {
         expect(() =>
             restoreCanvasVideoGenerationReferences({
@@ -92,7 +125,7 @@ function frameSelection(nodeId: string, source: string): CanvasVideoFrameSelecti
     return { nodeId, title: nodeId, source, previewUrl: source, width: 1280, height: 720, mimeType: "image/webp" };
 }
 
-function snapshot(id: string, role: "first_frame" | "last_frame", source: string) {
+function snapshot(id: string, role: "reference" | "first_frame" | "last_frame", source: string) {
     return { type: "image" as const, role, id, name: `${id}.webp`, mimeType: "image/webp", source, previewUrl: `/api/reference-assets/${source}`, storageKey: source, width: 1280, height: 720 };
 }
 

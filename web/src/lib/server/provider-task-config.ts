@@ -88,7 +88,7 @@ export function isProviderBusinessError(value: unknown) {
     const message = readProviderError(value);
     if (message && /失败|错误|无效|未授权|验证|禁止|过期|不足|不存在|拒绝|异常|error|fail|invalid|unauthorized|forbidden|expired|insufficient|not found|denied|unsupported/i.test(message)) return true;
 
-    const code = record.code;
+    const code = record.code ?? record.errorCode;
     if (code === undefined || code === null || code === "" || !message) return false;
     const normalized = String(code).trim().toLowerCase();
     return !["0", "200", "201", "202", "ok", "success"].includes(normalized);

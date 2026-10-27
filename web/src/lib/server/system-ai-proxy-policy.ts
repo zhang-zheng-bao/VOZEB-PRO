@@ -4,6 +4,7 @@ type ProxyPathSet = {
     create?: Array<string | undefined>;
     query?: Array<string | undefined>;
     cancel?: Array<{ path?: string; method?: string }>;
+    upload?: Array<string | undefined>;
 };
 
 type ProxyPolicyInput = {
@@ -22,6 +23,7 @@ type ProxyPolicyInput = {
 
 export type SystemAiProxyAccess =
     | { allowed: true; capability: LogicalModelCapability; logicalModelId: string; operation: "create" }
+    | { allowed: true; capability: LogicalModelCapability; logicalModelId: string; operation: "upload" }
     | { allowed: true; capability: LogicalModelCapability; logicalModelId: string; operation: "query" | "cancel"; upstreamTaskId: string }
     | { allowed: false; status: 400 | 403 | 404 | 405; error: string };
 
@@ -38,6 +40,7 @@ export function authorizeSystemAiProxyRequest(input: ProxyPolicyInput): SystemAi
     if (!logical) return denied(403, "该上游模型未绑定可用逻辑模型");
 
     const candidates = requestPathCandidates(input.path, input.search);
+    if (method === "POST" && (input.paths?.upload || []).some((path) => pathMatchesAny(candidates, path, upstreamModel))) return allowed(logical, "upload");
     const cancelPaths = [...(input.paths?.cancel || []), ...defaultCancelPaths(logical.capability, input.paths?.create || [])].filter((item) => !item.method || item.method.toUpperCase() === method);
     const cancelMatch =
         method === "POST" || method === "DELETE"
@@ -180,8 +183,8 @@ function normalizeModel(value: string) {
         .toLowerCase();
 }
 
-function allowed(logical: LogicalModel, operation: "create" | "query" | "cancel"): SystemAiProxyAccess {
-    return operation === "create" ? { allowed: true, capability: logical.capability, logicalModelId: logical.id, operation } : denied(400, "系统模型任务操作缺少上游任务 ID");
+function allowed(logical: LogicalModel, operation: "create" | "upload" | "query" | "cancel"): SystemAiProxyAccess {
+    return operation === "create" || operation === "upload" ? { allowed: true, capability: logical.capability, logicalModelId: logical.id, operation } : denied(400, "系统模型任务操作缺少上游任务 ID");
 }
 
 function allowedTaskOperation(logical: LogicalModel, operation: "query" | "cancel", upstreamTaskId: string): SystemAiProxyAccess {

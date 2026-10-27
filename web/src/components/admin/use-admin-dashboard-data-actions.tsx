@@ -144,6 +144,8 @@ export function useAdminDashboardDataActions({ state }: { state: AdminDashboardS
         setAnnouncementSaving,
         setAnnouncementModalOpen,
         setPromptModalOpen,
+        editingPrompt,
+        setEditingPrompt,
         announcementDraft,
         setAnnouncementDraft,
         stats,
@@ -365,25 +367,33 @@ export function useAdminDashboardDataActions({ state }: { state: AdminDashboardS
         }
     };
 
-    const createPrompt = async (value: PromptFormValue) => {
+    const savePrompt = async (value: PromptFormValue) => {
         setPromptSaving(true);
         try {
-            const response = await fetch("/api/admin/prompts", {
-                method: "POST",
+            const response = await fetch(editingPrompt ? `/api/admin/prompts/${editingPrompt.id}` : "/api/admin/prompts", {
+                method: editingPrompt ? "PATCH" : "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ ...value, tags: splitTags(value.tags) }),
             });
             const payload = (await response.json()) as { prompt?: Prompt; error?: string };
-            if (!response.ok || !payload.prompt) throw new Error(payload.error || "新增提示词失败");
+            if (!response.ok || !payload.prompt) throw new Error(payload.error || (editingPrompt ? "更新提示词失败" : "新增提示词失败"));
+            const wasEditing = Boolean(editingPrompt);
+            if (wasEditing) setPrompts((items) => items.map((item) => (item.id === payload.prompt!.id ? payload.prompt! : item)));
             promptForm.resetFields();
-            setPromptPage(1);
-            setPromptSearch("");
-            setDebouncedPromptSearch("");
+            setEditingPrompt(null);
             setPromptModalOpen(false);
-            void loadPrompts(1, "");
-            message.success("公共提示词已新增");
+            if (wasEditing) {
+                void loadPrompts(promptPage, debouncedPromptSearch);
+                message.success("公共提示词已更新");
+            } else {
+                setPromptPage(1);
+                setPromptSearch("");
+                setDebouncedPromptSearch("");
+                void loadPrompts(1, "");
+                message.success("公共提示词已新增");
+            }
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "新增提示词失败");
+            message.error(error instanceof Error ? error.message : editingPrompt ? "更新提示词失败" : "新增提示词失败");
         } finally {
             setPromptSaving(false);
         }
@@ -734,13 +744,29 @@ export function useAdminDashboardDataActions({ state }: { state: AdminDashboardS
     };
 
     const openPromptModal = () => {
+        setEditingPrompt(null);
         promptForm.resetFields();
+        setPromptModalOpen(true);
+    };
+
+    const openPromptEditor = (prompt: Prompt) => {
+        setEditingPrompt(prompt);
+        promptForm.setFieldsValue({
+            title: prompt.title,
+            prompt: prompt.prompt,
+            category: prompt.category,
+            tags: prompt.tags.join(", "),
+            coverUrl: prompt.coverUrl,
+            preview: prompt.preview,
+        });
         setPromptModalOpen(true);
     };
 
     const closePromptModal = () => {
         if (promptSaving) return;
         setPromptModalOpen(false);
+        setEditingPrompt(null);
+        promptForm.resetFields();
     };
 
     const updateAnnouncementById = async (announcement: PublicAnnouncement, patch: Partial<PublicAnnouncement>) => {
@@ -781,7 +807,7 @@ export function useAdminDashboardDataActions({ state }: { state: AdminDashboardS
         createUser,
         deleteUser,
         bulkDeleteUsers,
-        createPrompt,
+        savePrompt,
         deletePrompt,
         bulkDeletePrompts,
         loadPrompts,
@@ -802,6 +828,7 @@ export function useAdminDashboardDataActions({ state }: { state: AdminDashboardS
         openAnnouncementModal,
         closeAnnouncementModal,
         openPromptModal,
+        openPromptEditor,
         closePromptModal,
         updateAnnouncementById,
         deleteAnnouncementById,

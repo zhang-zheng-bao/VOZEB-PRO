@@ -3,7 +3,9 @@ import type { NextResponse } from "next/server";
 
 import { deleteSession, getPublicUsersByIds, getUserBySession, sessionMaxAgeSeconds, type AuthSettings, type PublicUser } from "./store";
 import { authorizedWorkerUserId } from "@/lib/server/maintenance-auth";
+import { isPersonalMode, personalModeUser } from "@/lib/server/personal-mode";
 import { getTrustedProxyHops } from "@/lib/server/trusted-proxy";
+import { channelCredentialsReady } from "@/lib/channel-protocol-registry";
 import { parseSessionCookie } from "./store-normalizers";
 
 const SESSION_COOKIE_NAME = "vozeb_pro_session";
@@ -16,6 +18,7 @@ async function getSessionCookieValue() {
 }
 
 export async function getCurrentUser(request?: Request) {
+    if (isPersonalMode()) return personalModeUser();
     const sessionUser = await getUserBySession(await getSessionCookieValue());
     if (sessionUser || !request) return sessionUser;
     const workerUserId = authorizedWorkerUserId(request);
@@ -166,7 +169,7 @@ export function serializePublicSettings(settings: AuthSettings) {
                 apiFormat: channel.apiFormat,
                 models: channel.models,
                 enabled: channel.enabled,
-                hasApiKey: Boolean(channel.apiKey),
+                hasApiKey: channelCredentialsReady(channel),
             })),
     };
 }

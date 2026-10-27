@@ -95,6 +95,22 @@ describe("system AI proxy policy", () => {
         expect(authorizeSystemAiProxyRequest({ ...base, method: "GET", path: ["jobs", "other", "task-one"], search: "" })).toMatchObject({ allowed: false, status: 404 });
     });
 
+    it("allows an explicitly configured support upload without treating it as a billed generation", () => {
+        expect(
+            authorizeSystemAiProxyRequest({
+                method: "POST",
+                path: ["openapi", "v2", "media", "upload", "binary"],
+                search: "",
+                channelId: "main",
+                upstreamModel: "vendor-video",
+                preferredLogicalModelId: "video-pro",
+                logicalModels,
+                apiFormat: "openai",
+                paths: { upload: ["/openapi/v2/media/upload/binary"] },
+            }),
+        ).toMatchObject({ allowed: true, logicalModelId: "video-pro", operation: "upload" });
+    });
+
     it("extracts task ids from query strings and rejects conflicting hints", () => {
         const base = {
             channelId: "main",

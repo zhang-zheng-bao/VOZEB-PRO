@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { DEFAULT_SETTINGS } from "./store-foundation";
 import type { AuthSettings } from "./store-types";
+import { applyChannelProtocol } from "@/lib/channel-protocol-registry";
 import { serializePublicSettings, setSessionCookie } from "./session";
 
 afterEach(() => {
@@ -11,6 +12,15 @@ afterEach(() => {
 });
 
 describe("serializePublicSettings", () => {
+    it("marks a no-auth ComfyUI channel ready without an API key", () => {
+        const settings: AuthSettings = structuredClone(DEFAULT_SETTINGS);
+        settings.systemChannels = [
+            applyChannelProtocol({ id: "comfyui", name: "ComfyUI", baseUrl: "http://127.0.0.1:8188", apiKey: "", apiFormat: "openai", models: [], enabled: true }, "comfyui"),
+        ];
+
+        expect(serializePublicSettings(settings).systemChannels[0]).toMatchObject({ id: "comfyui", hasApiKey: true, models: ["minimax-h3-multi-reference"] });
+    });
+
     it("only exposes the browser settings allowlist", () => {
         const settings: AuthSettings = structuredClone(DEFAULT_SETTINGS);
         settings.mail = { ...settings.mail, host: "smtp.internal", username: "mail-user", password: "mail-secret" };

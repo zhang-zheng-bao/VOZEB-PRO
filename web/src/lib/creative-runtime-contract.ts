@@ -131,6 +131,7 @@ export type CreativeGenerationPreferences = {
         generateAudio?: boolean;
         watermark?: boolean;
         referenceMode?: CreativeVideoReferenceMode;
+        comfyuiMode?: string;
         firstFrameAssetId?: string;
         lastFrameAssetId?: string;
     };

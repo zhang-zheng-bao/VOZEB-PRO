@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdir, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 
 const mocks = vi.hoisted(() => ({
     after: vi.fn(),
@@ -16,6 +18,7 @@ const mocks = vi.hoisted(() => ({
     updateVideoTask: vi.fn(),
     writeVideoGenerationLog: vi.fn(),
     scheduleGenerationTask: vi.fn(),
+    fetchSafeOutbound: vi.fn(),
     withGenerationConcurrencyLimit: vi.fn(async (_userId, _type, _staleMs, _limit, handler) => handler()),
 }));
 
@@ -31,6 +34,8 @@ vi.mock("@/lib/auth/store", () => {
     return { AuthInputError, getAuthSettings: mocks.getAuthSettings, isAuthInputError: (error: unknown) => error instanceof AuthInputError, refundUserPoints: vi.fn() };
 });
 vi.mock("@/lib/server/internal-origin", () => ({ fetchInternalApi: mocks.fetchInternalApi, resolveInternalOrigin: vi.fn(() => "http://localhost") }));
+vi.mock("@/lib/server/safe-outbound-fetch", () => ({ fetchSafeOutbound: mocks.fetchSafeOutbound }));
+vi.mock("@/lib/server/local-media-registry", () => ({ getLocalMediaRegistration: vi.fn(async () => null) }));
 vi.mock("@/lib/server/generation-task-store", () => ({
     withGenerationConcurrencyLimit: mocks.withGenerationConcurrencyLimit,
     linkStoredGenerationTask: mocks.linkStoredGenerationTask,
@@ -88,6 +93,7 @@ describe("video generation candidate failover", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mocks.fetchInternalApi.mockReset();
+        mocks.fetchSafeOutbound.mockReset();
         resetChannelRuntimeHealth();
         mocks.getAuthSettings.mockResolvedValue(settings);
         storedTask = undefined;
@@ -143,6 +149,456 @@ describe("video generation candidate failover", () => {
         expect(mocks.fetchInternalApi.mock.calls.some(([url]) => String(url).includes("/api/ai/system/two/"))).toBe(false);
         expect(mocks.createVideoTask).toHaveBeenCalledOnce();
         expect(mocks.scheduleGenerationTask).toHaveBeenLastCalledWith("video", "local-task", expect.objectContaining({ executionPhase: "needs_review", nextPollAt: undefined, lastUpstreamStatus: "submission_outcome_unknown" }));
+    });
+
+    it("fails safely when ComfyUI is offline before submitting a prompt", async () => {
+        mocks.getAuthSettings.mockResolvedValue({
+            ...settings,
+            systemChannels: [
+                {
+                    id: "comfyui",
+                    name: "ComfyUI",
+                    baseUrl: "http://127.0.0.1:18189",
+                    apiKey: "",
+                    apiFormat: "openai",
+                    models: ["minimax-h3-multi-reference"],
+                    enabled: true,
+                    advancedConfig: { protocol: "comfyui", authMode: "none", videoModel: "minimax-h3-multi-reference", queryPath: "/history/:id" },
+                },
+            ],
+            logicalModels: [
+                {
+                    id: "comfyui-video",
+                    name: "ComfyUI MiniMax H3",
+                    capability: "video",
+                    enabled: true,
+                    bindings: [{ id: "comfyui", channelId: "comfyui", upstreamModel: "minimax-h3-multi-reference", enabled: true, priority: 1 }],
+                },
+            ],
+            defaultModels: { videoModel: "comfyui-video" },
+        });
+        mocks.fetchSafeOutbound.mockRejectedValueOnce(new TypeError("fetch failed"));
+
+        const response = await POST(request({ model: "comfyui-video" }));
+
+        expect(response.status).toBe(502);
+        await expect(response.json()).resolves.toMatchObject({ error: "ComfyUI 服务器离线，请启动服务器或恢复连接后重试。", canRetry: true });
+        expect(mocks.scheduleGenerationTask.mock.calls.some(([, , patch]) => patch.executionPhase === "needs_review")).toBe(false);
+        expect(mocks.scheduleGenerationTask).toHaveBeenLastCalledWith("video", "local-task", expect.objectContaining({ executionPhase: "completed", lastUpstreamStatus: "create_failed" }));
+        expect(mocks.transitionVideoTask).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "error", retryable: true }));
+    });
+
+    it("uploads local RunningHub reference assets before submitting the video request", async () => {
+        const token = "permanent/2026/08/16/images/rh-reference.png";
+        const filePath = resolve(process.cwd(), ".data", "reference-assets", token);
+        await mkdir(resolve(filePath, ".."), { recursive: true });
+        await writeFile(filePath, new Uint8Array([137, 80, 78, 71]));
+        const rhSettings = {
+            ...settings,
+            systemChannels: [
+                {
+                    id: "runninghub-video",
+                    name: "RunningHub 视频",
+                    baseUrl: "https://www.runninghub.ai",
+                    apiKey: "rh-secret",
+                    apiFormat: "openai" as const,
+                    models: ["Vidu-image-to-video-q2-pro"],
+                    enabled: true,
+                    advancedConfig: {
+                        protocol: "runninghub" as const,
+                        createPath: "/openapi/v2/Vidu-image-to-video-q2-pro",
+                        queryPath: "/openapi/v2/query/:task_id",
+                        requestTemplate: '{"prompt":"{{prompt}}","duration":"{{duration}}","imageUrl":"{{image}}","imageUrls":"{{images}}"}',
+                        resultField: "data.outputs[0].url",
+                        statusField: "data.status",
+                        supportsReferenceImage: true,
+                        supportsReferenceVideo: false,
+                        supportsReferenceAudio: false,
+                    },
+                },
+            ],
+            logicalModels: [
+                {
+                    id: "rh-video",
+                    name: "RH Video",
+                    capability: "video" as const,
+                    enabled: true,
+                    bindings: [{ id: "rh", channelId: "runninghub-video", upstreamModel: "Vidu-image-to-video-q2-pro", enabled: true, priority: 1 }],
+                },
+            ],
+            defaultModels: { videoModel: "rh-video" },
+        };
+        mocks.getAuthSettings.mockResolvedValue(rhSettings);
+        mocks.fetchSafeOutbound.mockResolvedValue(json({ data: { downloadUrl: "https://rh.example/uploads/reference.png" } }));
+        mocks.fetchInternalApi.mockResolvedValue(json({ data: { taskId: "rh-task", status: "3" } }));
+
+        const response = await POST(request({ model: "rh-video", videoSeconds: 5 }, [{ type: "image", role: "reference", url: `/api/reference-assets/${token}` }]));
+
+        expect(response.status).toBe(200);
+        expect(mocks.fetchSafeOutbound).toHaveBeenCalledWith("https://www.runninghub.ai/openapi/v2/media/upload/binary", expect.objectContaining({ method: "POST" }));
+        expect(String(mocks.fetchInternalApi.mock.calls[0]?.[0] || "")).toContain("/api/ai/system/runninghub-video/openapi/v2/vidu/image-to-video-q2-pro");
+        const submittedBody = JSON.parse(String(mocks.fetchInternalApi.mock.calls[0]?.[1]?.body || "{}")) as Record<string, unknown>;
+        expect(submittedBody.imageUrl).toBe("https://rh.example/uploads/reference.png");
+        expect(submittedBody).not.toHaveProperty("imageUrls");
+    });
+
+    it("uploads generated RunningHub reference assets before submitting a Vidu request", async () => {
+        const token = "permanent/2026/08/16/images/generated-rh-reference.png";
+        const filePath = resolve(process.cwd(), ".data", "generation-assets", token);
+        await mkdir(resolve(filePath, ".."), { recursive: true });
+        await writeFile(filePath, new Uint8Array([137, 80, 78, 71]));
+        const rhSettings = {
+            ...settings,
+            systemChannels: [
+                {
+                    id: "runninghub-video",
+                    name: "RunningHub 视频",
+                    baseUrl: "https://www.runninghub.ai",
+                    apiKey: "rh-secret",
+                    apiFormat: "openai" as const,
+                    models: ["Vidu-image-to-video-q2-pro"],
+                    enabled: true,
+                    advancedConfig: {
+                        protocol: "runninghub" as const,
+                        createPath: "/openapi/v2/Vidu-image-to-video-q2-pro",
+                        imageToVideoPath: "/openapi/v2/Vidu-image-to-video-q2-pro",
+                        queryPath: "/openapi/v2/query/:task_id",
+                        requestTemplate: '{"prompt":"{{prompt}}","duration":"{{duration}}","imageUrl":"{{image}}","imageUrls":"{{images}}"}',
+                        resultField: "data.outputs[0].url",
+                        statusField: "data.status",
+                        supportsReferenceImage: true,
+                        supportsReferenceVideo: false,
+                        supportsReferenceAudio: false,
+                    },
+                },
+            ],
+            logicalModels: [
+                {
+                    id: "rh-vidu",
+                    name: "RH Vidu",
+                    capability: "video" as const,
+                    enabled: true,
+                    bindings: [{ id: "rh", channelId: "runninghub-video", upstreamModel: "Vidu-image-to-video-q2-pro", enabled: true, priority: 1 }],
+                },
+            ],
+            defaultModels: { videoModel: "rh-vidu" },
+        };
+        mocks.getAuthSettings.mockResolvedValue(rhSettings);
+        mocks.fetchSafeOutbound.mockResolvedValue(json({ data: { downloadUrl: "https://rh.example/uploads/generated-reference.png" } }));
+        mocks.fetchInternalApi.mockResolvedValue(json({ data: { taskId: "rh-task", status: "3" } }));
+
+        const response = await POST(request({ model: "rh-vidu", videoSeconds: 5 }, [{ type: "image", role: "reference", url: `/api/generation-log-assets/${token}` }]));
+
+        expect(response.status).toBe(200);
+        expect(mocks.fetchSafeOutbound).toHaveBeenCalledWith("https://www.runninghub.ai/openapi/v2/media/upload/binary", expect.objectContaining({ method: "POST" }));
+        expect(String(mocks.fetchInternalApi.mock.calls[0]?.[0] || "")).toContain("/api/ai/system/runninghub-video/openapi/v2/vidu/image-to-video-q2-pro");
+        const submittedBody = JSON.parse(String(mocks.fetchInternalApi.mock.calls[0]?.[1]?.body || "{}")) as Record<string, unknown>;
+        expect(submittedBody.imageUrl).toBe("https://rh.example/uploads/generated-reference.png");
+        expect(submittedBody).not.toHaveProperty("imageUrls");
+    });
+
+    it("dry-runs RunningHub Seedance2 Fast text-to-video through the local proxy without a real upstream call", async () => {
+        const rhSettings = runningHubSeedance2Settings();
+        mocks.getAuthSettings.mockResolvedValue(rhSettings);
+        mocks.fetchInternalApi.mockResolvedValue(json({ taskId: "seedance-dry-run", status: "RUNNING" }));
+
+        const response = await POST(request({ model: "rh-video-seedance2-0-fast-text-to-video-0f75431e", videoSeconds: 5, size: "16:9", vquality: "720", videoGenerateAudio: false }));
+        const payload = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(payload.task).toMatchObject({ id: "local-task", model: "rh-video-seedance2-0-fast-text-to-video-0f75431e", upstreamId: "seedance-dry-run", durationSeconds: 5 });
+        expect(mocks.fetchSafeOutbound).not.toHaveBeenCalled();
+        expect(mocks.fetchInternalApi).toHaveBeenCalledOnce();
+        expect(String(mocks.fetchInternalApi.mock.calls[0]?.[0] || "")).toBe("http://localhost/api/ai/system/runninghub-video/openapi/v2/rhart-video/sparkvideo-2.0-fast/text-to-video");
+        const submittedBody = JSON.parse(String(mocks.fetchInternalApi.mock.calls[0]?.[1]?.body || "{}")) as Record<string, unknown>;
+        expect(submittedBody).toMatchObject({
+            prompt: "A test video",
+            duration: 5,
+            aspectRatio: "16:9",
+            resolution: "720p",
+            generateAudio: false,
+        });
+        expect(submittedBody).not.toHaveProperty("image");
+        expect(submittedBody).not.toHaveProperty("videos");
+        expect(submittedBody).not.toHaveProperty("audios");
+    });
+
+    it("dry-runs RunningHub Seedance2 Fast multimodal video with multiple image video and audio references", async () => {
+        const rhSettings = runningHubSeedance2MultimodalSettings();
+        mocks.getAuthSettings.mockResolvedValue(rhSettings);
+        mocks.fetchInternalApi.mockResolvedValue(json({ taskId: "seedance-multimodal-dry-run", status: "RUNNING" }));
+
+        const references = [
+            { type: "image", role: "reference", url: "https://assets.example.com/ref-1.png" },
+            { type: "image", role: "reference", url: "https://assets.example.com/ref-2.png" },
+            { type: "video", role: "reference", url: "https://assets.example.com/action-1.mp4" },
+            { type: "video", role: "reference", url: "https://assets.example.com/action-2.mp4" },
+            { type: "audio", role: "reference", url: "https://assets.example.com/voice-1.mp3" },
+            { type: "audio", role: "reference", url: "https://assets.example.com/voice-2.wav" },
+        ];
+
+        const response = await POST(request({ model: "rh-video-seedance2-0-fast-multimodal-video-ffd28374", videoSeconds: 8, size: "16:9", vquality: "720", videoGenerateAudio: true }, references));
+        const payload = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(payload.task).toMatchObject({ id: "local-task", model: "rh-video-seedance2-0-fast-multimodal-video-ffd28374", upstreamId: "seedance-multimodal-dry-run", durationSeconds: 8 });
+        expect(mocks.fetchSafeOutbound).not.toHaveBeenCalled();
+        expect(mocks.fetchInternalApi).toHaveBeenCalledOnce();
+        expect(String(mocks.fetchInternalApi.mock.calls[0]?.[0] || "")).toBe("http://localhost/api/ai/system/runninghub-video/openapi/v2/rhart-video/sparkvideo-2.0-fast/multimodal-video");
+        const submittedBody = JSON.parse(String(mocks.fetchInternalApi.mock.calls[0]?.[1]?.body || "{}")) as Record<string, unknown>;
+        expect(String(submittedBody.prompt || "")).toContain("A test video");
+        expect(String(submittedBody.prompt || "")).toContain("参考素材一致性要求");
+        expect(submittedBody).toMatchObject({
+            duration: 8,
+            aspectRatio: "16:9",
+            resolution: "720p",
+            generateAudio: true,
+            imageUrls: ["https://assets.example.com/ref-1.png", "https://assets.example.com/ref-2.png"],
+            videoUrls: ["https://assets.example.com/action-1.mp4", "https://assets.example.com/action-2.mp4"],
+            audioUrls: ["https://assets.example.com/voice-1.mp3", "https://assets.example.com/voice-2.wav"],
+        });
+    });
+
+    it("rejects a RunningHub image-to-video request without a reference image before submission", async () => {
+        const rhSettings = {
+            ...settings,
+            systemChannels: [
+                {
+                    id: "runninghub-video",
+                    name: "RunningHub 视频",
+                    baseUrl: "https://www.runninghub.ai",
+                    apiKey: "rh-secret",
+                    apiFormat: "openai" as const,
+                    models: ["Vidu-image-to-video-q2-pro"],
+                    enabled: true,
+                    advancedConfig: {
+                        protocol: "runninghub" as const,
+                        createPath: "/openapi/v2/Vidu-image-to-video-q2-pro",
+                        imageToVideoPath: "/openapi/v2/Vidu-image-to-video-q2-pro",
+                        queryPath: "/openapi/v2/query/:task_id",
+                        requestTemplate: '{"prompt":"{{prompt}}","duration":"{{duration}}","imageUrl":"{{image}}","imageUrls":"{{images}}"}',
+                        resultField: "data.outputs[0].url",
+                        statusField: "data.status",
+                        supportsReferenceImage: true,
+                        supportsReferenceVideo: false,
+                        supportsReferenceAudio: false,
+                    },
+                },
+            ],
+            logicalModels: [
+                {
+                    id: "rh-vidu",
+                    name: "RH Vidu",
+                    capability: "video" as const,
+                    enabled: true,
+                    bindings: [{ id: "rh", channelId: "runninghub-video", upstreamModel: "Vidu-image-to-video-q2-pro", enabled: true, priority: 1 }],
+                },
+            ],
+            defaultModels: { videoModel: "rh-vidu" },
+        };
+        mocks.getAuthSettings.mockResolvedValue(rhSettings);
+        mocks.fetchInternalApi.mockResolvedValue(json({ data: { taskId: "rh-task", status: "3" } }));
+
+        const response = await POST(request({ model: "rh-vidu", videoSeconds: 5 }, []));
+
+        expect(response.status).toBe(502);
+        expect((await response.json()).error).toContain("需要连接一张参考图片");
+        expect(mocks.fetchInternalApi).not.toHaveBeenCalled();
+    });
+
+    it("clamps RunningHub Grok video duration to the supported 6-15 second range", async () => {
+        const rhSettings = {
+            ...settings,
+            systemChannels: [
+                {
+                    id: "runninghub-video",
+                    name: "RunningHub 视频",
+                    baseUrl: "https://www.runninghub.ai",
+                    apiKey: "rh-secret",
+                    apiFormat: "openai" as const,
+                    models: ["xai/grok-imagine-video-v1.5/image-to-video-official-stable"],
+                    enabled: true,
+                    advancedConfig: {
+                        protocol: "runninghub" as const,
+                        createPath: "/openapi/v2/xai/grok-imagine-video-v1.5/image-to-video-official-stable",
+                        imageToVideoPath: "/openapi/v2/xai/grok-imagine-video-v1.5/image-to-video-official-stable",
+                        queryPath: "/openapi/v2/query/:task_id",
+                        requestTemplate: '{"prompt":"{{prompt}}","duration":"{{duration}}","imageUrl":"{{image}}"}',
+                        resultField: "data.outputs[0].url",
+                        statusField: "data.status",
+                        supportsReferenceImage: true,
+                    },
+                },
+            ],
+            logicalModels: [
+                {
+                    id: "rh-grok",
+                    name: "RH Grok",
+                    capability: "video" as const,
+                    enabled: true,
+                    bindings: [{ id: "rh", channelId: "runninghub-video", upstreamModel: "xai/grok-imagine-video-v1.5/image-to-video-official-stable", enabled: true, priority: 1 }],
+                },
+            ],
+            defaultModels: { videoModel: "rh-grok" },
+        };
+        mocks.getAuthSettings.mockResolvedValue(rhSettings);
+        mocks.fetchInternalApi.mockResolvedValue(json({ data: { taskId: "rh-task", status: "3" } }));
+
+        await POST(request({ model: "rh-grok", videoSeconds: 2 }, [{ type: "image", role: "reference", url: "https://cdn.example.com/reference.jpg" }]));
+        let submittedBody = JSON.parse(String(mocks.fetchInternalApi.mock.calls.at(-1)?.[1]?.body || "{}")) as Record<string, unknown>;
+        expect(submittedBody.duration).toBe(6);
+
+        await POST(request({ model: "rh-grok", videoSeconds: 30 }, [{ type: "image", role: "reference", url: "https://cdn.example.com/reference.jpg" }]));
+        submittedBody = JSON.parse(String(mocks.fetchInternalApi.mock.calls.at(-1)?.[1]?.body || "{}")) as Record<string, unknown>;
+        expect(submittedBody.duration).toBe(15);
+    });
+
+    it("submits RunningHub Grok v1.5 reference video through the official RH OpenAPI path", async () => {
+        const rhSettings = {
+            ...settings,
+            systemChannels: [
+                {
+                    id: "runninghub-video",
+                    name: "RunningHub 视频",
+                    baseUrl: "https://www.runninghub.ai",
+                    apiKey: "rh-secret",
+                    apiFormat: "openai" as const,
+                    models: ["xai/grok-imagine-video-v1.5/reference-to-video-official-stable"],
+                    enabled: true,
+                    advancedConfig: {
+                        protocol: "runninghub" as const,
+                        createPath: "/openapi/v2/xai/grok-imagine-video-v1.5/reference-to-video-official-stable",
+                        imageToVideoPath: "/openapi/v2/xai/grok-imagine-video-v1.5/reference-to-video-official-stable",
+                        queryPath: "/openapi/v2/query/:task_id",
+                        requestTemplate: '{"prompt":"{{prompt}}","duration":"{{duration}}","aspectRatio":"{{aspect_ratio}}","resolution":"{{resolution}}","generateAudio":"{{generate_audio}}","imageUrls":"{{images}}","videoUrls":"{{videos}}","audioUrls":"{{audios}}"}',
+                        resultField: "data.outputs[0].url",
+                        statusField: "data.status",
+                        supportsReferenceImage: true,
+                        supportsReferenceVideo: true,
+                        supportsReferenceAudio: true,
+                    },
+                },
+            ],
+            logicalModels: [
+                {
+                    id: "rh-grok-reference",
+                    name: "RH Grok Reference",
+                    capability: "video" as const,
+                    enabled: true,
+                    bindings: [{ id: "rh", channelId: "runninghub-video", upstreamModel: "xai/grok-imagine-video-v1.5/reference-to-video-official-stable", enabled: true, priority: 1 }],
+                },
+            ],
+            defaultModels: { videoModel: "rh-grok-reference" },
+        };
+        mocks.getAuthSettings.mockResolvedValue(rhSettings);
+        mocks.fetchInternalApi.mockResolvedValue(json({ data: { taskId: "rh-task", status: "3" } }));
+
+        const response = await POST(
+            request({ model: "rh-grok-reference", videoSeconds: 6 }, [
+                { type: "image", role: "reference", url: "https://cdn.example.com/reference.jpg" },
+                { type: "video", role: "reference", url: "https://cdn.example.com/reference.mp4" },
+                { type: "audio", role: "reference", url: "https://cdn.example.com/reference.mp3" },
+            ]),
+        );
+
+        expect(response.status).toBe(200);
+        expect(String(mocks.fetchInternalApi.mock.calls[0]?.[0] || "")).toContain("/api/ai/system/runninghub-video/openapi/v2/rhart-video-g-official/reference-to-video-v1.5");
+        const submittedBody = JSON.parse(String(mocks.fetchInternalApi.mock.calls[0]?.[1]?.body || "{}")) as Record<string, unknown>;
+        expect(submittedBody.imageUrls).toEqual(["https://cdn.example.com/reference.jpg"]);
+        expect(submittedBody.videoUrls).toEqual(["https://cdn.example.com/reference.mp4"]);
+        expect(submittedBody.audioUrls).toEqual(["https://cdn.example.com/reference.mp3"]);
+    });
+
+    it("treats provider business errors without a task id as terminal failures", async () => {
+        const rhSettings = {
+            ...settings,
+            systemChannels: [
+                {
+                    id: "runninghub-video",
+                    name: "RunningHub 视频",
+                    baseUrl: "https://www.runninghub.ai",
+                    apiKey: "rh-secret",
+                    apiFormat: "openai" as const,
+                    models: ["rh-provider-business-error-fixture"],
+                    enabled: true,
+                    advancedConfig: {
+                        protocol: "runninghub" as const,
+                        createPath: "/openapi/v2/rh-provider-business-error-fixture",
+                        queryPath: "/openapi/v2/query/:task_id",
+                        requestTemplate: '{"prompt":"{{prompt}}","duration":"{{duration}}","imageUrls":"{{images}}","videoUrls":"{{videos}}","audioUrls":"{{audios}}"}',
+                        resultField: "data.outputs[0].url",
+                        statusField: "data.status",
+                        supportsReferenceImage: true,
+                        supportsReferenceVideo: true,
+                        supportsReferenceAudio: true,
+                    },
+                },
+            ],
+            logicalModels: [
+                {
+                    id: "rh-provider-business-error",
+                    name: "RH Provider Business Error",
+                    capability: "video" as const,
+                    enabled: true,
+                    bindings: [{ id: "rh", channelId: "runninghub-video", upstreamModel: "rh-provider-business-error-fixture", enabled: true, priority: 1 }],
+                },
+            ],
+            defaultModels: { videoModel: "rh-provider-business-error" },
+        };
+        mocks.getAuthSettings.mockResolvedValue(rhSettings);
+        mocks.fetchInternalApi.mockResolvedValue(json({ code: 400, message: "该模型在当前CN节点已下线，请前往全球站接入使用。" }));
+
+        const response = await POST(request({ model: "rh-provider-business-error", videoSeconds: 6 }, [{ type: "image", role: "reference", url: "https://cdn.example.com/reference.jpg" }]));
+
+        expect(response.status).toBe(502);
+        expect(await response.json()).toMatchObject({ error: expect.stringContaining("当前CN节点已下线") });
+        expect(mocks.scheduleGenerationTask).toHaveBeenLastCalledWith("video", "local-task", expect.objectContaining({ executionPhase: "completed", lastUpstreamStatus: "create_failed" }));
+    });
+
+    it("blocks discontinued RunningHub Grok v1 reference video before submission", async () => {
+        const rhSettings = {
+            ...settings,
+            systemChannels: [
+                {
+                    id: "runninghub-video",
+                    name: "RunningHub 视频",
+                    baseUrl: "https://www.runninghub.ai",
+                    apiKey: "rh-secret",
+                    apiFormat: "openai" as const,
+                    models: ["xai/grok-imagine-video/reference-to-video-official-stable"],
+                    enabled: true,
+                    advancedConfig: {
+                        protocol: "runninghub" as const,
+                        createPath: "/openapi/v2/xai/grok-imagine-video/reference-to-video-official-stable",
+                        queryPath: "/openapi/v2/query/:task_id",
+                        requestTemplate: '{"prompt":"{{prompt}}","duration":"{{duration}}","imageUrls":"{{images}}","videoUrls":"{{videos}}","audioUrls":"{{audios}}"}',
+                        resultField: "data.outputs[0].url",
+                        statusField: "data.status",
+                        supportsReferenceImage: true,
+                        supportsReferenceVideo: true,
+                        supportsReferenceAudio: true,
+                    },
+                },
+            ],
+            logicalModels: [
+                {
+                    id: "rh-video-xai-grok-imagine-video-reference-to-video-official-stable-d29de666",
+                    name: "RH Grok v1 Reference",
+                    capability: "video" as const,
+                    enabled: true,
+                    bindings: [{ id: "rh", channelId: "runninghub-video", upstreamModel: "xai/grok-imagine-video/reference-to-video-official-stable", enabled: true, priority: 1 }],
+                },
+            ],
+            defaultModels: { videoModel: "rh-video-xai-grok-imagine-video-reference-to-video-official-stable-d29de666" },
+        };
+        mocks.getAuthSettings.mockResolvedValue(rhSettings);
+
+        const response = await POST(request({ model: "rh-video-xai-grok-imagine-video-reference-to-video-official-stable-d29de666", videoSeconds: 6 }, [{ type: "image", role: "reference", url: "https://cdn.example.com/reference.jpg" }]));
+
+        expect(response.status).toBe(400);
+        expect((await response.json()).error).toContain("Grok v1.5");
+        expect(mocks.fetchInternalApi).not.toHaveBeenCalled();
+        expect(mocks.createVideoTask).not.toHaveBeenCalled();
     });
 
     it("does not retry another path or binding after an ambiguous server failure", async () => {
@@ -751,6 +1207,90 @@ function seedanceFrameSettings() {
                 bindings: [{ ...settings.logicalModels[0].bindings[0], upstreamModel: model }],
             },
         ],
+    };
+}
+
+function runningHubSeedance2Settings() {
+    const model = "Seedance2.0 Fast Text to Video";
+    return {
+        ...settings,
+        systemChannels: [
+            {
+                id: "runninghub-video",
+                name: "RunningHub 视频",
+                baseUrl: "/api/ai/system/runninghub-video",
+                providerBaseUrl: "https://www.runninghub.ai",
+                providerApiKey: "rh-secret",
+                apiKey: "system",
+                apiFormat: "openai" as const,
+                models: [model],
+                enabled: true,
+                advancedConfig: {
+                    protocol: "runninghub" as const,
+                    createPath: "/openapi/v2/Seedance2.0 Fast Text to Video",
+                    queryPath: "/openapi/v2/query/:task_id",
+                    requestTemplate: '{"prompt":"{{prompt}}","duration":"{{duration}}","aspectRatio":"{{aspect_ratio}}","resolution":"{{resolution}}","generateAudio":"{{generate_audio}}"}',
+                    resultField: "results[0].url",
+                    statusField: "status",
+                    supportsReferenceImage: false,
+                    supportsReferenceVideo: false,
+                    supportsReferenceAudio: false,
+                },
+            },
+        ],
+        logicalModels: [
+            {
+                id: "rh-video-seedance2-0-fast-text-to-video-0f75431e",
+                name: "RH 视频 - Seedance2.0 Fast Text to Video",
+                capability: "video" as const,
+                enabled: true,
+                bindings: [{ id: "rh-seedance", channelId: "runninghub-video", upstreamModel: model, enabled: true, priority: 1 }],
+            },
+        ],
+        defaultModels: { ...settings.defaultModels, videoModel: "rh-video-seedance2-0-fast-text-to-video-0f75431e" },
+    };
+}
+
+function runningHubSeedance2MultimodalSettings() {
+    const model = "Seedance2.0 Fast Multimodal Video";
+    return {
+        ...settings,
+        systemChannels: [
+            {
+                id: "runninghub-video",
+                name: "RunningHub 视频",
+                baseUrl: "/api/ai/system/runninghub-video",
+                providerBaseUrl: "https://www.runninghub.ai",
+                providerApiKey: "rh-secret",
+                apiKey: "system",
+                apiFormat: "openai" as const,
+                models: [model],
+                enabled: true,
+                advancedConfig: {
+                    protocol: "runninghub" as const,
+                    createPath: "/openapi/v2/rhart-video/sparkvideo-2.0-fast/multimodal-video",
+                    imageToVideoPath: "/openapi/v2/rhart-video/sparkvideo-2.0-fast/multimodal-video",
+                    queryPath: "/openapi/v2/query/:task_id",
+                    requestTemplate: '{"prompt":"{{prompt}}","duration":"{{duration}}","aspectRatio":"{{aspect_ratio}}","resolution":"{{resolution}}","generateAudio":"{{generate_audio}}","imageUrls":"{{images}}","videoUrls":"{{videos}}","audioUrls":"{{audios}}"}',
+                    resultField: "data.outputs[0].url / results[0].url / url",
+                    statusField: "data.status / status / taskStatus",
+                    referenceRule: "支持图片、视频、音频，素材需是 RH 可读取的 URL 或已上传素材。",
+                    supportsReferenceImage: true,
+                    supportsReferenceVideo: true,
+                    supportsReferenceAudio: true,
+                },
+            },
+        ],
+        logicalModels: [
+            {
+                id: "rh-video-seedance2-0-fast-multimodal-video-ffd28374",
+                name: "RH 视频 - Seedance2.0 Fast Multimodal Video",
+                capability: "video" as const,
+                enabled: true,
+                bindings: [{ id: "rh-seedance-multimodal", channelId: "runninghub-video", upstreamModel: model, enabled: true, priority: 1 }],
+            },
+        ],
+        defaultModels: { ...settings.defaultModels, videoModel: "rh-video-seedance2-0-fast-multimodal-video-ffd28374" },
     };
 }
 

@@ -8,6 +8,7 @@ import { resolveInternalOrigin } from "@/lib/server/internal-origin";
 import { generationModelId } from "@/lib/server/generation-channel";
 import { runGenerationTaskRecoveryBatch } from "@/lib/server/generation-task-recovery-service";
 import { cancellationExecutionPatch, type GenerationCancellationTarget } from "@/lib/server/generation-task-cancellation-service";
+import { isPersonalMode } from "@/lib/server/personal-mode";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,7 +26,20 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const shouldRefund = Boolean(task.billing?.pointsRecordId && !task.billing.refunded && task.status === "error");
     const settledTask = shouldRefund ? await refundAudioTask(task) : task;
     const refreshedUser = shouldRefund ? await getCurrentUser(request) : user;
-    return NextResponse.json({ task: { ...publicTask(settledTask), needsReview: task.executionPhase === "needs_review", reviewReason: task.reviewReason, executionPhase: task.executionPhase } }, { headers: pointsResponseHeaders(refreshedUser) });
+    const reviewHidden = isPersonalMode() && task.executionPhase === "needs_review";
+    return NextResponse.json(
+        {
+            task: {
+                ...publicTask(settledTask),
+                status: reviewHidden ? "error" : settledTask.status,
+                error: reviewHidden ? task.reviewReason || "生成状态不确定，请重新生成" : settledTask.error,
+                needsReview: false,
+                reviewReason: undefined,
+                executionPhase: reviewHidden ? "completed" : task.executionPhase,
+            },
+        },
+        { headers: pointsResponseHeaders(refreshedUser) },
+    );
 }
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {

@@ -40,6 +40,7 @@ export const GENERATION_LOG_PAGE_SIZE = 20;
 
 import type { AdminDashboardDataActions } from "./use-admin-dashboard-data-actions";
 import type { AdminDashboardState } from "./use-admin-dashboard-state";
+import { removeChannelFromWorkspace } from "./channels/admin-channel-workspace-model";
 
 export function useAdminDashboardSettingsActions({ state, data }: { state: AdminDashboardState; data: AdminDashboardDataActions }) {
     const { message, settings, setSettings, setMailTestLoading, mailTestTo, setFetchingModelId, customPointModel, setCustomPointModel } = state;
@@ -81,10 +82,17 @@ export function useAdminDashboardSettingsActions({ state, data }: { state: Admin
     };
 
     const deleteChannel = async (id: string) => {
-        const systemChannels = settings.systemChannels.filter((channel) => channel.id !== id);
-        const logicalModels = synchronizeLogicalModelsWithChannels(settings.logicalModels, systemChannels);
-        const defaultModels = normalizeDefaultModelsConfig(settings.defaultModels, logicalModels, systemChannels);
-        return saveSettings({ systemChannels, logicalModels, defaultModels }, "渠道已删除");
+        const previous = latestSettingsRef.current;
+        const removed = removeChannelFromWorkspace(previous, id);
+        const next = { ...previous, ...removed };
+        latestSettingsRef.current = next;
+        setSettings(next);
+        const saved = await saveSettings(removed, "渠道已删除");
+        if (!saved && latestSettingsRef.current === next) {
+            latestSettingsRef.current = previous;
+            setSettings(previous);
+        }
+        return saved;
     };
 
     const updateFreeDailyPoints = (value: number | null) => {

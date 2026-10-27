@@ -4,7 +4,7 @@ import { Panel, PanelHeader } from "@/components/admin/admin-panel";
 import { LabeledControl, SectionTitle } from "@/components/admin/admin-settings-controls";
 import { Button, Checkbox, DatePicker, Input, Modal, Pagination, Popconfirm, Space, Switch, Table, Tag } from "antd";
 import dayjs from "dayjs";
-import { Database, ExternalLink, Plus, RefreshCw, Save, Search, Trash2 } from "lucide-react";
+import { Database, ExternalLink, Pencil, Plus, RefreshCw, Save, Search, Trash2 } from "lucide-react";
 
 import { imagePreviewUrl } from "@/lib/media-image-url";
 
@@ -190,14 +190,15 @@ export function AdminPromptsSection({ controller }: { controller: AdminDashboard
         deletePrompt,
         bulkDeletePrompts,
         openPromptModal,
+        openPromptEditor,
         promptColumns,
     } = controller;
     if (activeSection !== "prompts") return null;
     return (
         <Panel>
             <PanelHeader
-                title="提示词运营"
-                description="维护用户端提示词库展示的公共提示词，沉淀可复用的内容资产。"
+                title="提示词库"
+                description="维护本地提示词库，沉淀可重复使用的创作模板。"
                 actions={
                     <Button type="primary" icon={<Plus className="size-4" />} onClick={openPromptModal}>
                         添加提示词
@@ -209,7 +210,7 @@ export function AdminPromptsSection({ controller }: { controller: AdminDashboard
                     <div className="admin-prompt-table-header flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-6">
                         <div className="min-w-0">
                             <h3 className="text-base font-semibold text-stone-950 dark:text-stone-100">提示词列表</h3>
-                            <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">已收录的公共提示词会同步展示到用户端提示词库。</p>
+                            <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">已收录的提示词会展示在创作界面的提示词库中。</p>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
                             <span className="rounded-md bg-stone-100 px-2.5 py-1 text-xs font-medium text-stone-600 dark:bg-white/10 dark:text-stone-300">{promptListTotal ? `${promptListStart}-${promptListEnd} / ${promptListTotal} 条` : "0 条"}</span>
@@ -232,7 +233,7 @@ export function AdminPromptsSection({ controller }: { controller: AdminDashboard
                         />
                         <div className="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-end">
                             <span className="text-xs text-stone-500 dark:text-stone-400">已选 {selectedPrompts.length} 条</span>
-                            <Popconfirm title="批量删除选中提示词？" description="会从公共提示词库中移除，用户端将不再显示这些提示词。" okText="删除" cancelText="取消" onConfirm={() => void bulkDeletePrompts()}>
+                            <Popconfirm title="批量删除选中提示词？" description="删除后将不再出现在本地提示词库中。" okText="删除" cancelText="取消" onConfirm={() => void bulkDeletePrompts()}>
                                 <Button danger disabled={!selectedPrompts.length} loading={bulkDeletingPrompts} icon={<Trash2 className="size-4" />}>
                                     批量删除
                                 </Button>
@@ -274,8 +275,11 @@ export function AdminPromptsSection({ controller }: { controller: AdminDashboard
                                                 </Tag>
                                             ))}
                                         </div>
-                                        <div className="mt-3 flex justify-end">
-                                            <Popconfirm title="删除公共提示词？" okText="删除" cancelText="取消" onConfirm={() => deletePrompt(prompt.id)}>
+                                        <div className="mt-3 flex justify-end gap-2">
+                                            <Button size="small" icon={<Pencil className="size-3.5" />} onClick={() => openPromptEditor(prompt)}>
+                                                编辑
+                                            </Button>
+                                            <Popconfirm title="删除提示词？" okText="删除" cancelText="取消" onConfirm={() => deletePrompt(prompt.id)}>
                                                 <Button size="small" danger loading={deletingPromptId === prompt.id} icon={<Trash2 className="size-3.5" />}>
                                                     删除
                                                 </Button>

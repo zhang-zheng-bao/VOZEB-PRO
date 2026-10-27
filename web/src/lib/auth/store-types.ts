@@ -4,10 +4,9 @@ export type { AdminPermission } from "@/lib/admin-permissions";
 import type { AdminPermission } from "@/lib/admin-permissions";
 import type { GlobalAiOpcPresetId } from "@/lib/globalaiopc-catalog";
 import type { RegistrationPolicyConsent } from "@/lib/registration-consent";
-import { VOZEB_QQ_GROUP_URL } from "@/constant/community";
 
 export type ApiCallFormat = "openai" | "gemini";
-export type SystemChannelProtocol = "auto" | "openai" | "yumeng" | "gemini" | "sub2api" | "newapi" | "vozeb-recommended" | "globalaiopc" | "seedance" | "stable-diffusion" | "volcengine-video" | "seedance-special" | "custom" | "compatible";
+export type SystemChannelProtocol = "auto" | "openai" | "yumeng" | "gemini" | "runninghub" | "sub2api" | "newapi" | "vozeb-recommended" | "globalaiopc" | "seedance" | "stable-diffusion" | "volcengine-video" | "seedance-special" | "comfyui" | "custom" | "compatible";
 export type SystemChannelAuthMode = "none" | "bearer" | "x-api-key" | "custom-header";
 
 export type SystemChannelModelConfig = {
@@ -60,6 +59,14 @@ export type SystemChannelAdvancedConfig = {
     modelCapabilities?: Record<string, LogicalModelCapability>;
     modelConfigs?: Record<string, SystemChannelModelConfig>;
     operationConfigs?: Partial<Record<LogicalModelCapability, SystemChannelModelConfig>>;
+    comfyuiWorkflow?: string | Record<string, unknown>;
+    comfyuiPromptNode?: string;
+    comfyuiDurationNode?: string;
+    comfyuiSeedNode?: string;
+    comfyuiScaleNode?: string;
+    comfyuiRefNode?: string;
+    comfyuiFastOutputNode?: string;
+    comfyuiBalancedOutputNode?: string;
 };
 
 export type LegacyUserQuota = {
@@ -154,6 +161,12 @@ export type AgentSkill = {
     sourceCommit?: string;
     sourceContentHash?: string;
     license?: string;
+};
+
+export type AgentPromptSettings = {
+    chat: string;
+    canvas: string;
+    drama: string;
 };
 
 export type GenerationConcurrencySettings = {
@@ -319,17 +332,13 @@ export type SiteSocialSettings = Record<
 >;
 
 export const DEFAULT_SITE_SOCIALS: SiteSocialSettings = {
-    email: { enabled: true, label: "邮箱联系", url: "mailto:csyqlz@gmail.com" },
+    email: { enabled: false, label: "邮箱联系", url: "" },
     telegram: { enabled: false, label: "Telegram", url: "" },
     x: { enabled: false, label: "X", url: "" },
     instagram: { enabled: false, label: "Instagram", url: "" },
 };
 
-export const DEFAULT_SITE_FRIEND_LINKS: SiteFriendLink[] = [
-    { id: "vozeb-pro-home", label: "VOZEB PRO", url: "https://www.vozeb.com/", enabled: true },
-    { id: "qq-vozeb-open-source", label: "VOZEB 开源交流 QQ 群", url: VOZEB_QQ_GROUP_URL, enabled: true },
-    { id: "linux-do", label: "Linux.do", url: "https://linux.do/", enabled: true },
-];
+export const DEFAULT_SITE_FRIEND_LINKS: SiteFriendLink[] = [];
 
 export type MailSettings = {
     provider: string;
@@ -466,6 +475,7 @@ export type AuthSettings = {
     systemChannels: SystemModelChannel[];
     logicalModels: LogicalModel[];
     defaultModels: SystemDefaultModels;
+    agentPrompts: AgentPromptSettings;
     agentSkills: AgentSkill[];
 };
 

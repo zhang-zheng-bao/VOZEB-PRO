@@ -75,6 +75,7 @@ function postgresSettingsPatch(patch: Partial<AuthSettings>, settings: AuthSetti
     if (patch.generationDefaults !== undefined) result.generationDefaults = asJson(settings.generationDefaults);
     if (patch.logicalModels !== undefined) result.logicalModels = asJson(settings.logicalModels);
     if (patch.defaultModels !== undefined) result.defaultModels = asJson(settings.defaultModels);
+    if (patch.agentPrompts !== undefined) result.agentPrompts = asJson(settings.agentPrompts);
     if (patch.agentSkills !== undefined) result.agentSkills = asJson(settings.agentSkills);
     return result;
 }

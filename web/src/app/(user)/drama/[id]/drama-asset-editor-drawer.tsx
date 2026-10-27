@@ -1,20 +1,23 @@
 "use client";
 
-import { App, Button, Drawer, Image, Input, InputNumber, Modal, Popconfirm, Popover, Space, Tooltip } from "antd";
-import { Check, FolderInput, ImagePlus, Sparkles, Trash2, Upload } from "lucide-react";
+import { App, Button, Drawer, Image, Input, InputNumber, Modal, Popconfirm, Popover, Select, Space, Tooltip } from "antd";
+import { Check, FolderInput, ImagePlus, Settings2, Sparkles, Trash2, Upload } from "lucide-react";
 import { nanoid } from "nanoid";
 import { useEffect, useRef, useState } from "react";
 
 import { compileDramaAssetReferencePrompt } from "@/lib/drama-prompt-compiler";
-import type { DramaAssetProfile, DramaAssetReference, DramaCharacter, DramaNamedAsset, DramaProject, DramaVoiceProfile } from "@/lib/drama-project-contract";
+import type { DramaAssetProfile, DramaAssetReference, DramaCharacter, DramaNamedAsset, DramaProject, DramaPromptTemplateKind, DramaVoiceProfile } from "@/lib/drama-project-contract";
+import { dramaPromptTemplateCategory } from "@/lib/drama-style-presets";
 import { imagePreviewUrl } from "@/lib/media-image-url";
+import { listMyPrompts } from "@/services/api/my-prompts";
 import { createImageGenerationTask, waitForImageGenerationTask } from "@/services/api/image";
+import type { Prompt } from "@/services/api/prompts";
 import { uploadImage } from "@/services/image-storage";
 import { useEffectiveConfig } from "@/stores/use-config-store";
 import { useDramaStore } from "../stores/use-drama-store";
 import { DRAMA_ASSET_DEFINITIONS, type DramaAssetKind } from "./drama-asset-definitions";
 import { dramaAssetReferences, imageResultsToReferences } from "./drama-asset-reference-utils";
-import { dramaGenerationSize } from "./drama-shot-generation-utils";
+import { dramaAssetGenerationReferences, dramaGenerationSize, dramaImageModelOptions, dramaImageModelSupportsReference, dramaImageModelSupportsText, isDramaImageModelUsable, selectDramaImageModel } from "./drama-shot-generation-utils";
 
 type AssetDraft = {
     name: string;
@@ -36,16 +39,33 @@ export function DramaAssetEditorDrawer({ project, kind, assetId, open, onClose }
     const addProp = useDramaStore((state) => state.addProp);
     const addClue = useDramaStore((state) => state.addClue);
     const updateAsset = useDramaStore((state) => state.updateAsset);
+    const updateProject = useDramaStore((state) => state.updateProject);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const editorKeyRef = useRef("");
     const [draft, setDraft] = useState<AssetDraft>(emptyDraft);
     const [uploading, setUploading] = useState(false);
     const [generating, setGenerating] = useState(false);
+    const [templates, setTemplates] = useState<Prompt[]>([]);
+    const [templatesLoading, setTemplatesLoading] = useState(false);
     const definition = DRAMA_ASSET_DEFINITIONS[kind];
     const asset = project[kind].find((item) => item.id === assetId);
     const character = kind === "characters" ? (asset as DramaCharacter | undefined) : undefined;
     const references = asset ? dramaAssetReferences(asset) : [];
     const primary = references.find((reference) => reference.id === asset?.primaryReferenceId) || references[0];
+    const templateKind: DramaPromptTemplateKind | undefined = kind === "characters" ? "character" : kind === "scenes" ? "scene" : kind === "props" ? "prop" : undefined;
+    const imageModelOptions = dramaImageModelOptions(config);
+    const configuredImageModel = templateKind ? project.assetImageModels?.[templateKind] : undefined;
+    const generationReferenceCandidates = asset && kind !== "clues" ? dramaAssetGenerationReferences(project, asset, kind) : [];
+    const configuredModelMatchesGeneration = configuredImageModel
+        ? generationReferenceCandidates.length
+            ? dramaImageModelSupportsReference(config, configuredImageModel)
+            : dramaImageModelSupportsText(config, configuredImageModel)
+        : false;
+    const selectedImageModel = configuredImageModel && isDramaImageModelUsable(config, configuredImageModel) && configuredModelMatchesGeneration ? configuredImageModel : selectDramaImageModel(config, Boolean(generationReferenceCandidates.length));
+    const compatibleImageModelOptions = imageModelOptions.filter((model) => (generationReferenceCandidates.length ? model.supportsReference : model.supportsText));
+    const relatedReferenceNames = generationReferenceCandidates
+        .filter((reference) => reference.id.startsWith("related-"))
+        .map((reference) => reference.name.replace(/^关联(?:角色|道具)-/, "").replace(/\.png$/, ""));
 
     useEffect(() => {
         if (!open) {
@@ -66,7 +86,17 @@ export function DramaAssetEditorDrawer({ project, kind, assetId, open, onClose }
             profile: asset.profile || emptyProfile(),
             voiceProfile: character?.voiceProfile || emptyVoiceProfile(),
         });
-    }, [asset, character?.voiceProfile, kind, open]);
+    }, [asset, assetId, character?.voiceProfile, kind, open]);
+
+    useEffect(() => {
+        if (!open) return;
+        if (!templateKind) return;
+        setTemplatesLoading(true);
+        void listMyPrompts({ page: 1, pageSize: 100, category: dramaPromptTemplateCategory(templateKind), includeFacets: false })
+            .then((result) => setTemplates(result.items))
+            .catch((error) => message.error(error instanceof Error ? error.message : "提示词模板加载失败"))
+            .finally(() => setTemplatesLoading(false));
+    }, [message, open, templateKind]);
 
     const save = () => {
         const name = draft.name.trim();
@@ -181,8 +211,11 @@ export function DramaAssetEditorDrawer({ project, kind, assetId, open, onClose }
         setGenerating(true);
         try {
             const prompt = compileDramaAssetReferencePrompt(project, asset, kind === "characters" ? "角色" : kind === "scenes" ? "场景" : "道具");
-            const imageConfig = { ...config, model: config.imageModel || config.model, imageModel: config.imageModel || config.model, size: dramaGenerationSize(project, prompt), count: "1" };
-            const task = await createImageGenerationTask(imageConfig, prompt, [], undefined, {
+            const imageModel = selectedImageModel;
+            if (!imageModel) throw new Error("请先在设置中配置可用的图片模型");
+            const generationReferences = dramaImageModelSupportsReference(config, imageModel) ? generationReferenceCandidates : [];
+            const imageConfig = { ...config, model: imageModel, imageModel, size: dramaGenerationSize(project, prompt, generationReferences), count: "1" };
+            const task = await createImageGenerationTask(imageConfig, prompt, generationReferences, undefined, {
                 logSource: "drama",
                 logTitle: `${project.title} · ${asset.name}设定图`,
                 conversationId: project.creativeConversationId,
@@ -199,6 +232,20 @@ export function DramaAssetEditorDrawer({ project, kind, assetId, open, onClose }
         } finally {
             setGenerating(false);
         }
+    };
+
+    const selectTemplate = (id?: string) => {
+        if (!templateKind) return;
+        const template = templates.find((item) => item.id === id);
+        const promptTemplates = { ...project.promptTemplates };
+        if (template) promptTemplates[templateKind] = { id: template.id, title: template.title, prompt: template.prompt };
+        else delete promptTemplates[templateKind];
+        updateProject(project.id, { promptTemplates });
+    };
+
+    const selectImageModel = (modelId: string) => {
+        if (!templateKind) return;
+        updateProject(project.id, { assetImageModels: { ...project.assetImageModels, [templateKind]: modelId } });
     };
 
     const actions = (
@@ -283,6 +330,43 @@ export function DramaAssetEditorDrawer({ project, kind, assetId, open, onClose }
 
             {asset ? (
                 <section className="border-t border-border pt-4">
+                    {templateKind ? (
+                        <>
+                            <div className="mb-2 grid gap-2 sm:grid-cols-2">
+                                <label className="grid min-w-0 gap-1.5 text-sm">
+                                    <span className="font-medium">{definition.title}提示词模板</span>
+                                    <Select
+                                        allowClear
+                                        loading={templatesLoading}
+                                        value={project.promptTemplates?.[templateKind]?.id}
+                                        placeholder="使用默认生成约束"
+                                        onChange={selectTemplate}
+                                        options={templates.map((template) => ({ label: template.title, value: template.id }))}
+                                    />
+                                </label>
+                                <label className="grid min-w-0 gap-1.5 text-sm">
+                                    <span className="font-medium">生图模型</span>
+                                    <Select
+                                        showSearch
+                                        optionFilterProp="label"
+                                        value={selectedImageModel || undefined}
+                                        placeholder="请选择可用的图片模型"
+                                        onChange={selectImageModel}
+                                        options={compatibleImageModelOptions.map((model) => ({
+                                            label: `${model.name} · ${model.supportsReference ? (model.supportsText ? "文生图 / 参考图" : "参考图") : "文生图"}`,
+                                            value: model.id,
+                                        }))}
+                                    />
+                                </label>
+                            </div>
+                            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-xs leading-5 text-muted-foreground">
+                                    {relatedReferenceNames.length ? `一致性参考：${relatedReferenceNames.join("、")}` : `模型和模板按${definition.title}类型保存在当前项目中。`}
+                                </p>
+                                <Button size="small" href="/settings?section=dramaStyles" icon={<Settings2 className="size-3.5" />}>管理模板</Button>
+                            </div>
+                        </>
+                    ) : null}
                     <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                             <h3 className="text-sm font-semibold">参考图候选</h3>

@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/auth/store", () => ({
-    DEFAULT_SITE_SETTINGS: { title: "VOZEB PRO", logoUrl: "/logo.svg" },
+    DEFAULT_SITE_SETTINGS: { title: "万创核心", logoUrl: "/wanchuang-core-logo.png" },
     getPublicUserSummary: mocks.getPublicUserSummary,
 }));
 
@@ -108,6 +108,19 @@ describe("install status cache", () => {
 
         await expect(initializeInstallDatabase(process.env.VOZEB_PRO_INSTALL_TOKEN)).resolves.toMatchObject({ firstAdminRequired: true, database: { schemaReady: true } });
         expect(mocks.initializePostgresSchema).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats personal file mode as installed without creating a first admin", async () => {
+        mocks.provider = "file";
+        mocks.getPublicUserSummary.mockResolvedValue({ total: 0 });
+        vi.stubEnv("VOZEB_PRO_PERSONAL_MODE", "true");
+
+        await expect(getInstallStatus()).resolves.toMatchObject({
+            provider: "file",
+            ready: true,
+            firstAdminRequired: false,
+            database: { healthy: true, schemaReady: true },
+        });
     });
 
     it("rejects repeated initialization after the first user exists", async () => {

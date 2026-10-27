@@ -30,8 +30,8 @@ export function normalizeVideoGenerationReferences(value: unknown): VideoGenerat
     }
     const firstFrames = references.filter((reference) => reference.role === "first_frame");
     const lastFrames = references.filter((reference) => reference.role === "last_frame");
-    if (firstFrames.length > 1) throw new Error("一次只能指定一张首帧图片");
-    if (lastFrames.length > 1) throw new Error("一次只能指定一张尾帧图片");
+    if (firstFrames.length > 1) throw new Error("一次只能指定一张首帧");
+    if (lastFrames.length > 1) throw new Error("一次只能指定一张尾帧");
     if (lastFrames.length && !firstFrames.length) throw new Error("指定尾帧时必须同时指定首帧");
     if (firstFrames.length && lastFrames.length && firstFrames[0].url === lastFrames[0].url) throw new Error("首帧和尾帧不能使用同一张图片");
     return Array.from(new Map(references.map((reference) => [`${reference.type}:${reference.role}:${reference.url}`, reference])).values());

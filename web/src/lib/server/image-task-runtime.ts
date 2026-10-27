@@ -1,7 +1,7 @@
 import { runCustomImageTask, pollCustomImageTask } from "@/app/api/image-tasks/image-task-custom";
 import { runGeminiImageTask } from "@/app/api/image-tasks/image-task-gemini";
 import { runOpenAiImageTask } from "@/app/api/image-tasks/image-task-openai";
-import { directRemoteImageResult, imageUnits, ImageQueryContractError, ImageUpstreamTerminalError, inlineRemoteImageResult, pollOpenAiImageTask, resolveProxiedMediaSource } from "@/app/api/image-tasks/image-task-support";
+import { directRemoteImageResult, imageUnits, ImageQueryContractError, ImageUpstreamTerminalError, inlineRemoteImageResult, pollOpenAiImageTask, resolveProxiedMediaSource, taskUrl } from "@/app/api/image-tasks/image-task-support";
 import type { ImageTaskMediaResult, ImageTaskResult, ImageTaskRunResult } from "@/app/api/image-tasks/image-task-types";
 import { stableMediaUrl, writeImageGenerationLog } from "@/app/api/image-tasks/image-task-runner";
 import { getAuthSettings, refundUserPoints } from "@/lib/auth/store";
@@ -15,6 +15,7 @@ import { scheduleGenerationTask } from "@/lib/server/generation-task-scheduler";
 import { GenerationSubmissionSafeFailure, generationSubmissionUncertainError } from "@/lib/server/generation-submission-error";
 import { getImageTask, transitionImageTask, updateImageTask, type ImageTask } from "@/lib/server/image-task-store";
 import { maintenanceWorkerContext } from "@/lib/server/maintenance-auth";
+import { isPersonalMode } from "@/lib/server/personal-mode";
 
 export type ImageUpstreamStep =
     | { state: "pending"; upstream: NonNullable<ImageTask["upstream"]>; status: string }
@@ -72,11 +73,14 @@ export async function queryImageTaskUpstreamStep(task: ImageTask, origin: string
     const authContext = cookie || maintenanceWorkerContext(workerUserId || task.userId);
     try {
         const result = usesDeclarativeImageProtocol(task.config.advancedConfig?.protocol)
-            ? await pollCustomImageTask(task, upstream.id, upstream.pollBaseUrl, authContext, true)
+            ? await pollCustomImageTask(task, upstream.id, imagePollRequestBaseUrl(task, origin), authContext, true)
             : await pollOpenAiImageTask(task.config, upstream.id, upstream.mediaBaseUrl, upstream.pollBaseUrl, authContext, upstream.explicitPollUrl || "", true);
         return await handleImageProviderResult(task, { ...result, pointsCost: task.billing?.pointsCost, pointsRecordId: task.billing?.pointsRecordId }, origin, authContext);
     } catch (error) {
-        if (error instanceof ImageQueryContractError) return { state: "needs_review", reason: error.message, status: "query_contract_invalid" };
+        if (error instanceof ImageQueryContractError) {
+            if (isPersonalMode()) return { state: "failed", error: error.message, status: "query_contract_invalid" };
+            return { state: "needs_review", reason: error.message, status: "query_contract_invalid" };
+        }
         if (error instanceof ImageUpstreamTerminalError) return { state: "failed", error: error.message, status: "failed" };
         if (error instanceof GenerationSubmissionSafeFailure) return { state: "failed", error: error.message, status: "failed" };
         throw error;
@@ -89,7 +93,7 @@ export async function queryCancelledImageTaskUpstreamStep(task: ImageTask, origi
     const authContext = cookie || maintenanceWorkerContext(workerUserId || task.userId);
     try {
         const result = usesDeclarativeImageProtocol(task.config.advancedConfig?.protocol)
-            ? await pollCustomImageTask(task, upstream.id, upstream.pollBaseUrl, authContext, true)
+            ? await pollCustomImageTask(task, upstream.id, imagePollRequestBaseUrl(task, origin), authContext, true)
             : await pollOpenAiImageTask(task.config, upstream.id, upstream.mediaBaseUrl, upstream.pollBaseUrl, authContext, upstream.explicitPollUrl || "", true);
         return result.pending ? { state: "pending" as const, status: "processing" } : { state: "terminal" as const, status: "completed" };
     } catch (error) {
@@ -140,6 +144,18 @@ async function handleImageProviderResult(task: ImageTask, result: ImageTaskRunRe
     const billing = result.pointsRecordId ? { pointsCost: result.pointsCost ?? 0, pointsRecordId: result.pointsRecordId, refunded: false } : undefined;
     if (billing) await updateImageTask(task.id, { billing });
     if (result.needsReview) {
+        if (isPersonalMode()) {
+            const failed = await markImageTaskFailed(task, result.needsReview.reason);
+            await scheduleGenerationTask("image", task.id, {
+                executionPhase: "completed",
+                channelId: task.config.channelId,
+                provider: task.config.advancedConfig?.protocol || task.config.apiFormat,
+                nextPollAt: undefined,
+                lastUpstreamStatus: "failed",
+                resultPayload: { error: result.needsReview.reason.slice(0, 500) },
+            });
+            return { state: "failed", error: failed?.error || result.needsReview.reason, status: "query_contract_missing" };
+        }
         const submittedAt = Date.now();
         await updateImageTask(task.id, { upstream: result.needsReview.upstream, billing });
         await scheduleGenerationTask("image", task.id, {
@@ -277,7 +293,21 @@ function imageTaskMediaResults(result: ImageTaskResult): ImageTaskMediaResult[] 
 }
 
 function usesDeclarativeImageProtocol(protocol: NonNullable<ImageTask["config"]["advancedConfig"]>["protocol"] | undefined) {
-    return protocol === "custom" || protocol === "stable-diffusion" || protocol === "yumeng";
+    return protocol === "custom" || protocol === "stable-diffusion" || protocol === "yumeng" || protocol === "runninghub";
+}
+
+function imagePollRequestBaseUrl(task: ImageTask, origin: string) {
+    const pollBaseUrl = task.upstream?.pollBaseUrl || "";
+    if (!task.config.baseUrl.startsWith("/")) return pollBaseUrl;
+    try {
+        const parsed = new URL(pollBaseUrl);
+        const local = new URL(origin);
+        if (parsed.origin === local.origin) return pollBaseUrl;
+    } catch {
+        if (pollBaseUrl.startsWith("/")) return `${origin}${pollBaseUrl}`;
+    }
+    const createPath = task.kind === "edit" ? task.config.advancedConfig?.editPath || task.config.advancedConfig?.createPath : task.config.advancedConfig?.createPath;
+    return taskUrl(task.config, createPath || "", origin);
 }
 
 async function normalizeSafeImageResult(task: ImageTask, result: ImageTaskMediaResult, origin: string, authContext: string): Promise<ImageTaskMediaResult> {

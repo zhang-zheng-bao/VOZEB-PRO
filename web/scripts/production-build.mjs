@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,6 +17,7 @@ try {
             NEXT_SKIP_BUILD_TYPECHECK: "1",
         });
     }
+    if (exitCode === 0) copyStandaloneAssets();
 } finally {
     restoreBuildFiles();
 }
@@ -41,6 +42,20 @@ function runNode(entry, args, label, environment = {}) {
 function readBuildFile(fileName) {
     const filePath = path.join(webRoot, fileName);
     return existsSync(filePath) ? readFileSync(filePath) : undefined;
+}
+
+function copyStandaloneAssets() {
+    const standaloneRoot = path.join(webRoot, ".next", "standalone");
+    if (!existsSync(standaloneRoot)) return;
+    const staticRoot = path.join(webRoot, ".next", "static");
+    if (existsSync(staticRoot)) {
+        cpSync(staticRoot, path.join(standaloneRoot, ".next", "static"), { recursive: true, force: true });
+    }
+    const publicRoot = path.join(webRoot, "public");
+    if (existsSync(publicRoot)) {
+        cpSync(publicRoot, path.join(standaloneRoot, "public"), { recursive: true, force: true });
+    }
+    console.log("Standalone 静态资源已复制。");
 }
 
 function restoreBuildFiles() {

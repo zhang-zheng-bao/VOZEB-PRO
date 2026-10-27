@@ -4,6 +4,8 @@ export const ADMIN_SECTION_KEYS = [
     "overview",
     "site",
     "channels",
+    "agentPrompts",
+    "dramaStyles",
     "skills",
     "settings",
     "accountDeletion",
@@ -31,6 +33,15 @@ export const ADMIN_SECTION_KEYS = [
 
 export type AdminSectionKey = (typeof ADMIN_SECTION_KEYS)[number];
 
+export const SETTINGS_SECTION_KEYS = ["channels", "agentPrompts", "dramaStyles", "skills", "prompts", "site", "settings", "mediaStorage", "externalStorage", "backup", "updates", "adminHelp"] as const satisfies readonly AdminSectionKey[];
+
+const settingsSectionKeys = new Set<AdminSectionKey>(SETTINGS_SECTION_KEYS);
+
+export function resolveSettingsSection(value: string | string[] | undefined): AdminSectionKey {
+    const section = parseAdminSection(value);
+    return settingsSectionKeys.has(section) ? section : "channels";
+}
+
 export const ADMIN_SECTION_PERMISSIONS: Record<AdminSectionKey, readonly AdminPermission[]> = {
     overview: ["analytics.read"],
     users: ["users.read"],
@@ -46,6 +57,8 @@ export const ADMIN_SECTION_PERMISSIONS: Record<AdminSectionKey, readonly AdminPe
     cdk: ["billing.manage"],
     wallet: ["billing.read", "billing.manage"],
     channels: ["upstream.manage"],
+    agentPrompts: ["upstream.manage"],
+    dramaStyles: ["content.manage"],
     skills: ["upstream.manage"],
     site: ["system.manage"],
     settings: ["system.manage", "upstream.manage"],
@@ -67,7 +80,7 @@ export function parseAdminSection(value: string | string[] | undefined): AdminSe
     return adminSectionKeys.has(section as AdminSectionKey) ? (section as AdminSectionKey) : "overview";
 }
 
-export function adminSectionHref(section: AdminSectionKey, currentHref = "/admin") {
+export function adminSectionHref(section: AdminSectionKey, currentHref = "/settings") {
     const url = new URL(currentHref, "http://localhost");
     if (section === "overview") url.searchParams.delete("section");
     else url.searchParams.set("section", section);

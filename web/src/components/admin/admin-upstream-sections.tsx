@@ -3,9 +3,10 @@
 import { Panel, PanelHeader } from "@/components/admin/admin-panel";
 import { AgentSkillCreateModal } from "@/components/admin/agent-skill-create-modal";
 import { AdminChannelWorkspace } from "@/components/admin/channels/admin-channel-workspace";
-import type { AgentSkill } from "@/lib/auth/store";
+import { DEFAULT_AGENT_PROMPTS } from "@/lib/agent-prompt-defaults";
+import type { AgentPromptSettings, AgentSkill } from "@/lib/auth/store";
 import { Button, Input, InputNumber, Select, Switch, Tag } from "antd";
-import { ChevronDown, Plus, Save, Trash2 } from "lucide-react";
+import { ChevronDown, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import type { AdminDashboardController } from "./use-admin-dashboard-controller";
@@ -42,6 +43,89 @@ export function AdminChannelsSection({ controller }: { controller: AdminDashboar
                     onFetchAll={fetchAllModels}
                     onPersist={(next, successText) => saveSettings(next, successText)}
                 />
+            </div>
+        </Panel>
+    );
+}
+
+const agentPromptFields: Array<{ key: keyof AgentPromptSettings; label: string; description: string }> = [
+    { key: "chat", label: "统一创作完整提示词", description: "用于统一创作入口中的普通对话、媒体任务规划和项目交接。" },
+    { key: "canvas", label: "无限画布完整提示词", description: "用于画布对话、节点编辑、素材引用和画布内媒体生成。" },
+    { key: "drama", label: "短剧项目完整提示词", description: "用于短剧项目中的角色、场景、分镜、连续性和媒体生产。" },
+];
+
+export function AdminAgentPromptsSection({ controller }: { controller: AdminDashboardController }) {
+    const { settings, setSettings, settingsLoading, activeSection, saveSettings } = controller;
+    const [expandedPrompt, setExpandedPrompt] = useState<keyof AgentPromptSettings>();
+    if (activeSection !== "agentPrompts") return null;
+    const updatePrompt = (key: keyof AgentPromptSettings, value: string) => setSettings((current) => ({ ...current, agentPrompts: { ...current.agentPrompts, [key]: value } }));
+    return (
+        <Panel>
+            <PanelHeader
+                title="Agent 系统提示词"
+                description="这里是实际发送给模型的完整系统提示词。可编辑身份、场景规则、素材引用、模型选择、工具调用和输出协议；{{FALLBACK_EXAMPLE}} 会在运行时替换为当前模型可用的 JSON 示例。"
+                actions={
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                        <Button
+                            icon={<RotateCcw className="size-4" />}
+                            onClick={() => {
+                                setSettings((current) => ({ ...current, agentPrompts: { ...DEFAULT_AGENT_PROMPTS } }));
+                                setExpandedPrompt(undefined);
+                            }}
+                        >
+                            恢复默认
+                        </Button>
+                        <Button type="primary" loading={settingsLoading} icon={<Save className="size-4" />} onClick={() => saveSettings({ agentPrompts: settings.agentPrompts }, "Agent 提示词已保存")}>
+                            保存更改
+                        </Button>
+                    </div>
+                }
+            />
+            <div className="divide-y divide-stone-200 px-3 sm:px-5 dark:divide-stone-800">
+                {agentPromptFields.map((field) => {
+                    const expanded = expandedPrompt === field.key;
+                    const value = settings.agentPrompts[field.key];
+                    return (
+                        <section key={field.key} className="py-3 sm:py-4">
+                            <button
+                                type="button"
+                                className="flex w-full min-w-0 items-start gap-3 rounded-md px-1 py-1 text-left text-stone-900 transition hover:bg-stone-50 dark:text-stone-100 dark:hover:bg-stone-900/70"
+                                aria-expanded={expanded}
+                                aria-controls={`agent-prompt-editor-${field.key}`}
+                                onClick={() => setExpandedPrompt(expanded ? undefined : field.key)}
+                            >
+                                <span className="min-w-0 flex-1">
+                                    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                        <span className="text-sm font-semibold">{field.label}</span>
+                                        <span className="text-xs text-stone-400 dark:text-stone-500">{value.length} 字</span>
+                                    </span>
+                                    <span className="mt-1 block text-xs leading-5 text-stone-500 dark:text-stone-400">{field.description}</span>
+                                    {!expanded ? (
+                                        <span
+                                            className="mt-1.5 text-xs leading-5 text-stone-400 dark:text-stone-500"
+                                            style={{ display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, overflow: "hidden" }}
+                                        >
+                                            {value}
+                                        </span>
+                                    ) : null}
+                                </span>
+                                <ChevronDown className={`mt-1 size-4 shrink-0 text-stone-400 transition-transform ${expanded ? "rotate-180" : ""}`} />
+                            </button>
+                            {expanded ? (
+                                <div id={`agent-prompt-editor-${field.key}`} className="pt-3">
+                                    <Input.TextArea
+                                        aria-label={field.label}
+                                        value={value}
+                                        maxLength={8000}
+                                        showCount
+                                        autoSize={{ minRows: 12, maxRows: 24 }}
+                                        onChange={(event) => updatePrompt(field.key, event.target.value)}
+                                    />
+                                </div>
+                            ) : null}
+                        </section>
+                    );
+                })}
             </div>
         </Panel>
     );

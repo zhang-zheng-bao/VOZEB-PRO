@@ -21,6 +21,7 @@ import {
     type LogicalModel,
     type SystemDefaultModels,
     type AgentSkill,
+    type AgentPromptSettings,
     type GenerationConcurrencySettings,
     type GenerationDefaultSettings,
     type GenerationPointMultipliers,
@@ -256,7 +257,16 @@ export function normalizeSettings(settings: AuthSettings): AuthSettings {
         systemChannels,
         logicalModels,
         defaultModels: normalizeDefaultModelsConfig(settings.defaultModels, logicalModels, systemChannels),
+        agentPrompts: normalizeAgentPrompts(settings.agentPrompts),
         agentSkills: normalizeAgentSkills(settings.agentSkills),
+    };
+}
+
+export function normalizeAgentPrompts(prompts: Partial<AgentPromptSettings> | undefined): AgentPromptSettings {
+    return {
+        chat: normalizeText(prompts?.chat, DEFAULT_SETTINGS.agentPrompts.chat, 8_000),
+        canvas: normalizeText(prompts?.canvas, DEFAULT_SETTINGS.agentPrompts.canvas, 8_000),
+        drama: normalizeText(prompts?.drama, DEFAULT_SETTINGS.agentPrompts.drama, 8_000),
     };
 }
 

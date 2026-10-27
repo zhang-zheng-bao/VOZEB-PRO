@@ -8,7 +8,7 @@ describe("drama prompt compiler", () => {
         const project = createProject();
         const prompts = compileDramaShotPrompts(project, project.episodes[0], project.episodes[0].shots[0]);
 
-        expect(prompts.imagePrompt).toContain("统一风格：现实电影感");
+        expect(prompts.imagePrompt).toContain("统一视觉风格：现实电影感");
         expect(prompts.imagePrompt).toContain("女主：红色外套");
         expect(prompts.imagePrompt).toContain("轴线 保持同侧");
         expect(prompts.startFramePrompt).toContain("动作起始");
@@ -21,7 +21,56 @@ describe("drama prompt compiler", () => {
 
         expect(prompt).toContain("角色设定图");
         expect(prompt).toContain("固定色彩：红黑");
+        expect(prompt).toContain("左侧大幅正面头肩胸像特写");
+        expect(prompt).toContain("右侧正面全身/90 度侧面全身/背面全身");
         expect(prompt).toContain("不添加文字");
+    });
+
+    it("locks a prop to the appearance already shown on a related character", () => {
+        const project = createProject();
+        project.characters[0].references = [{ id: "hero-reference", url: "/api/reference-assets/hero.png", source: "generated", label: "基准图", createdAt: "2026-01-01T00:00:00.000Z" }];
+        project.characters[0].primaryReferenceId = "hero-reference";
+        project.props = [{ id: "bag", name: "行囊", description: "女主随身携带的行囊" }];
+        project.episodes[0].shots[0].propIds = ["bag"];
+
+        const prompt = compileDramaAssetReferencePrompt(project, project.props[0], "道具");
+
+        expect(prompt).toContain("第 1 张是关联角色“女主”基准");
+        expect(prompt).toContain("必须从人物画面提取并复用该道具");
+        expect(prompt).toContain("输出只展示道具，不保留人物");
+    });
+
+    it("uses the project style prompt snapshot for assets and shots", () => {
+        const project = createProject();
+        project.visualStylePrompt = "二维赛璐璐动画，硬边阴影，统一蓝金色调";
+
+        const prompts = compileDramaShotPrompts(project, project.episodes[0], project.episodes[0].shots[0]);
+        const assetPrompt = compileDramaAssetReferencePrompt(project, project.characters[0], "角色");
+
+        expect(prompts.imagePrompt).toContain("统一视觉风格：二维赛璐璐动画，硬边阴影，统一蓝金色调");
+        expect(assetPrompt).toContain("统一视觉风格：二维赛璐璐动画，硬边阴影，统一蓝金色调");
+        expect(assetPrompt).not.toContain("统一视觉风格：现实电影感");
+    });
+
+    it("uses each purpose-specific template only in its matching generation prompt", () => {
+        const project = createProject();
+        project.promptTemplates = {
+            character: { id: "character-template", title: "人物模板", prompt: "人物模板约束，画面比例 16:9" },
+            storyboard: { id: "storyboard-template", title: "分镜模板", prompt: "分镜模板约束" },
+            video: { id: "video-template", title: "视频模板", prompt: "视频模板约束" },
+        };
+
+        const prompts = compileDramaShotPrompts(project, project.episodes[0], project.episodes[0].shots[0]);
+        const assetPrompt = compileDramaAssetReferencePrompt(project, project.characters[0], "角色");
+
+        expect(assetPrompt).toContain("人物建模模板：人物模板约束，画面比例 16:9");
+        expect(assetPrompt).toContain("角色设定图，画幅 16:9");
+        expect(assetPrompt).not.toContain("角色设定图，画幅 9:16");
+        expect(assetPrompt).not.toContain("分镜模板约束");
+        expect(prompts.imagePrompt).toContain("分镜图片模板：分镜模板约束");
+        expect(prompts.imagePrompt).not.toContain("视频模板约束");
+        expect(prompts.videoPrompt).toContain("视频生成模板：视频模板约束");
+        expect(prompts.videoPrompt).not.toContain("分镜模板约束");
     });
 
     it("preserves long execution prompts instead of truncating the final constraints", () => {

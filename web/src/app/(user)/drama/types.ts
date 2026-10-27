@@ -8,6 +8,8 @@ export type {
     DramaContentAnalysis,
     DramaEpisode,
     DramaProject,
+    DramaPromptTemplateKind,
+    DramaPromptTemplateSelection,
     DramaProjectSummary,
     DramaProjectVersion,
     DramaProp,

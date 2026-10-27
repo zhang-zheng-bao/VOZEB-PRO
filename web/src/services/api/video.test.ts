@@ -91,6 +91,16 @@ describe("video API service", () => {
         expect(fetchMock.mock.calls[0][0]).toBe("/api/video-generation-tasks");
     });
 
+    it("passes the ComfyUI generation mode to the server task endpoint", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(json({ task: { id: "video-task-comfy", model: "minimax-h3-multi-reference" } }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        await createServerVideoGenerationTask({ ...config, model: "minimax-h3-multi-reference", videoModel: "minimax-h3-multi-reference", comfyuiMode: "quality" }, "高质量生成");
+
+        const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+        expect(body.config.comfyuiMode).toBe("quality");
+    });
+
     it("returns a terminal failure when the upstream submission needs manual review", async () => {
         const fetchMock = vi.fn().mockResolvedValue(json({ task: { id: "video-review", status: "running", needsReview: true, reviewReason: "视频提交结果无法确认" } }));
         vi.stubGlobal("fetch", fetchMock);

@@ -9,9 +9,10 @@ import type { GlobalAiOpcPresetId } from "@/lib/globalaiopc-catalog";
 import { resolveChannelModelAdvancedConfig } from "@/lib/channel-protocol-registry";
 import { inferModelCapability, normalizeModelId } from "@/lib/model-capability";
 import { materializeLogicalModelPointCosts } from "@/lib/model-point-cost";
+import { appStorageKey } from "@/lib/storage-keys";
 
 type ApiCallFormat = "openai" | "gemini";
-type SystemChannelProtocol = "auto" | "openai" | "yumeng" | "gemini" | "sub2api" | "newapi" | "vozeb-recommended" | "globalaiopc" | "seedance" | "stable-diffusion" | "volcengine-video" | "seedance-special" | "custom" | "compatible";
+type SystemChannelProtocol = "auto" | "openai" | "yumeng" | "gemini" | "runninghub" | "sub2api" | "newapi" | "vozeb-recommended" | "globalaiopc" | "seedance" | "stable-diffusion" | "volcengine-video" | "seedance-special" | "comfyui" | "custom" | "compatible";
 
 type SystemChannelAdvancedConfig = {
     protocol: SystemChannelProtocol;
@@ -25,6 +26,8 @@ type SystemChannelAdvancedConfig = {
     imageModel: string;
     videoModel: string;
     createPath: string;
+    editPath?: string;
+    imageToVideoPath?: string;
     queryPath: string;
     requestTemplate: string;
     resultField: string;
@@ -44,6 +47,8 @@ type SystemChannelAdvancedConfig = {
             apiFormat?: ApiCallFormat;
             protocol?: SystemChannelProtocol;
             createPath?: string;
+            editPath?: string;
+            imageToVideoPath?: string;
             queryPath?: string;
             requestTemplate?: string;
             resultField?: string;
@@ -55,6 +60,7 @@ type SystemChannelAdvancedConfig = {
             supportsReferenceAudio?: boolean;
         }
     >;
+    comfyuiWorkflow?: string | Record<string, unknown>;
 };
 
 type ModelChannel = {
@@ -72,7 +78,21 @@ type LogicalModel = {
     name: string;
     capability: ModelCapability;
     enabled: boolean;
-    bindings: Array<{ id: string; channelId: string; upstreamModel: string; enabled: boolean; priority: number }>;
+    bindings: Array<{
+        id: string;
+        channelId: string;
+        upstreamModel: string;
+        enabled: boolean;
+        priority: number;
+        capabilityProfile?: {
+            supportsReferenceImage?: boolean;
+            supportsReferenceVideo?: boolean;
+            supportsReferenceAudio?: boolean;
+            maxReferenceImages?: number;
+            minDurationSeconds?: number;
+            maxDurationSeconds?: number;
+        };
+    }>;
 };
 
 export type AiConfig = {
@@ -93,6 +113,7 @@ export type AiConfig = {
     audioSpeed: string;
     audioInstructions: string;
     videoSeconds: string;
+    comfyuiMode?: string;
     vquality: string;
     videoGenerateAudio: string;
     videoWatermark: string;
@@ -154,6 +175,7 @@ export type PublicSystemSettings = {
 export type ModelCapability = "image" | "video" | "text" | "audio";
 const CHANNEL_MODEL_SEPARATOR = "::";
 const DEFAULT_SYSTEM_BASE_URL = "";
+const PREFERRED_MODELS_KEY = appStorageKey("preferred_generation_models");
 
 export const defaultConfig: AiConfig = {
     apiSource: "system",
@@ -239,13 +261,15 @@ export function applyPublicSystemSettings(config: AiConfig, settings?: PublicSys
             baseUrl: channel.baseUrl?.startsWith("/api/ai/system/") ? channel.baseUrl : `/api/ai/system/${channel.id}`,
             apiKey: "system",
             apiFormat: channel.apiFormat === "gemini" ? ("gemini" as const) : ("openai" as const),
-            models: uniqueRawModels(channel.models || []),
+            models: uniqueRawModels(channel.models || []).filter((model) => !isUnavailablePublicModel(model)),
             ...(channel.advancedConfig ? { advancedConfig: channel.advancedConfig } : {}),
-        }));
+        }))
+        .filter((channel) => channel.models.length);
     const logicalModels = (settings?.logicalModels || []).filter(
         (model) =>
             model.enabled &&
-            model.bindings.some((binding) => binding.enabled && channels.some((channel) => channel.id === binding.channelId && channel.models.some((upstream) => normalizedModelName(upstream) === normalizedModelName(binding.upstreamModel)))),
+            !isUnavailablePublicModel(model.id) &&
+            model.bindings.some((binding) => binding.enabled && !isUnavailablePublicModel(binding.upstreamModel) && channels.some((channel) => channel.id === binding.channelId && channel.models.some((upstream) => normalizedModelName(upstream) === normalizedModelName(binding.upstreamModel)))),
     );
     const rawModels = modelOptionsFromChannels(channels);
     const capabilityModels = resolvePublicCapabilityModels(logicalModels, {
@@ -257,10 +281,11 @@ export function applyPublicSystemSettings(config: AiConfig, settings?: PublicSys
     const { image: imageModels, video: videoModels, text: textModels, audio: audioModels } = capabilityModels;
     const models = flattenPublicCapabilityModels(capabilityModels);
     const defaultModels = settings?.defaultModels || {};
-    const imageModel = choosePublicModel(config.imageModel, defaultModels.imageModel, imageModels, logicalModels);
-    const videoModel = choosePublicModel(config.videoModel, defaultModels.videoModel, videoModels, logicalModels);
-    const textModel = choosePublicModel(config.textModel, defaultModels.textModel, textModels, logicalModels);
-    const audioModel = chooseConfiguredDefaultModel(defaultModels.audioModel, audioModels, logicalModels);
+    const preferredModels = readPreferredModels();
+    const imageModel = choosePublicModel(config.imageModel || preferredModels.imageModel || "", defaultModels.imageModel, imageModels, logicalModels);
+    const videoModel = choosePublicModel(config.videoModel || preferredModels.videoModel || "", defaultModels.videoModel, videoModels, logicalModels);
+    const textModel = choosePublicModel(config.textModel || preferredModels.textModel || "", defaultModels.textModel, textModels, logicalModels);
+    const audioModel = chooseConfiguredDefaultModel(preferredModels.audioModel || defaultModels.audioModel, audioModels, logicalModels);
     return {
         ...config,
         apiSource: "system",
@@ -301,7 +326,11 @@ export const useConfigStore = create<ConfigStore>()((set) => ({
     isConfigOpen: false,
     shouldPromptContinue: false,
     setConfig: (config) => set({ config: enforceSystemClientConfig(config) }),
-    updateConfig: (key, value) => set((state) => ({ config: enforceSystemClientConfig({ ...state.config, [key]: value }) })),
+    updateConfig: (key, value) =>
+        set((state) => {
+            rememberPreferredModel(key, value);
+            return { config: enforceSystemClientConfig({ ...state.config, [key]: value }) };
+        }),
     isAiConfigReady: (config, model) => isAiConfigReady(config, model),
     openConfigDialog: (shouldPromptContinue = false) => {
         if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("vozeb-pro-system-config-missing", { detail: { shouldPromptContinue } }));
@@ -408,7 +437,7 @@ export function modelOptionLabel(config: AiConfig, value: string) {
 
 function modelOptionsFromChannels(channels: ModelChannel[]) {
     const names = new Map<string, string>();
-    channels.forEach((channel) => channel.models.forEach((model) => names.set(modelOptionName(model).toLowerCase(), modelOptionName(model))));
+    channels.forEach((channel) => channel.models.filter((model) => !isUnavailablePublicModel(model)).forEach((model) => names.set(modelOptionName(model).toLowerCase(), modelOptionName(model))));
     return Array.from(names.values());
 }
 
@@ -422,6 +451,32 @@ function choosePublicModel(currentValue: string, adminDefault: string | undefine
 
 function chooseConfiguredDefaultModel(adminDefault: string | undefined, options: string[], logicalModels: LogicalModel[] = []) {
     return resolveLogicalDefaultModel(adminDefault, options, logicalModels);
+}
+
+function readPreferredModels(): Partial<Pick<AiConfig, "imageModel" | "videoModel" | "textModel" | "audioModel">> {
+    if (typeof window === "undefined") return {};
+    try {
+        const parsed = JSON.parse(window.localStorage.getItem(PREFERRED_MODELS_KEY) || "{}");
+        if (!parsed || typeof parsed !== "object") return {};
+        const next = parsed as Partial<Pick<AiConfig, "imageModel" | "videoModel" | "textModel" | "audioModel">>;
+        return {
+            ...next,
+            videoModel: next.videoModel && !isUnavailablePublicModel(next.videoModel) ? next.videoModel : undefined,
+        };
+    } catch {
+        return {};
+    }
+}
+
+function rememberPreferredModel(key: keyof AiConfig, value: unknown) {
+    if (typeof window === "undefined" || !["imageModel", "videoModel", "textModel", "audioModel"].includes(String(key)) || typeof value !== "string") return;
+    if (key === "videoModel" && isUnavailablePublicModel(value)) return;
+    try {
+        const current = readPreferredModels();
+        window.localStorage.setItem(PREFERRED_MODELS_KEY, JSON.stringify({ ...current, [key]: value }));
+    } catch {
+        // Local storage may be unavailable in private or restricted contexts.
+    }
 }
 
 function resolveLogicalDefaultModel(value: string | undefined, options: string[], logicalModels: LogicalModel[]) {
@@ -502,6 +557,16 @@ function enforceSystemClientConfig(config: AiConfig): AiConfig {
 
 function uniqueRawModels(models: string[]) {
     return Array.from(new Set((models || []).map((model) => modelOptionName(model).trim()).filter(Boolean)));
+}
+
+export function isUnavailablePublicModel(value: string) {
+    const name = normalizedModelName(modelOptionName(value));
+    return (
+        name === "xai/grok-imagine-video/reference-to-video-official-stable" ||
+        name === "rh-video-xai-grok-imagine-video-reference-to-video-official-stable-d29de666" ||
+        name === "vidu-image-to-video-q2-turbo" ||
+        name === "rh-video-vidu-image-to-video-q2-turbo-1f3cb21b"
+    );
 }
 
 function normalizedModelName(model: string) {

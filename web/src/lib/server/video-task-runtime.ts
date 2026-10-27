@@ -3,6 +3,7 @@ import { generationModelId, systemGenerationChannelId } from "@/lib/server/gener
 import { generationMediaProxyHeaders } from "@/lib/server/generation-media-authorization";
 import { finishGenerationAttempt } from "@/lib/server/generation-attempt";
 import { fetchInternalApi } from "@/lib/server/internal-origin";
+import { fetchSafeOutbound } from "@/lib/server/safe-outbound-fetch";
 import { resolveModelRequestTimeoutMs } from "@/lib/server/model-request-policy";
 import { isProviderBusinessError, providerQueryPaths, readProviderError, videoPollingPolicy } from "@/lib/server/provider-task-config";
 import { registerGenerationTaskAssetsForUser } from "@/lib/server/creative-runtime-service";
@@ -31,6 +32,7 @@ export async function refreshVideoTaskFromUpstream(task: VideoTask, origin: stri
 export async function queryVideoTaskUpstream(task: VideoTask, origin: string, cookie = "", workerUserId = ""): Promise<VideoUpstreamStep> {
     if (task.upstream.resultUrl) return { state: "result_ready", status: "completed", resultUrl: task.upstream.resultUrl };
     if (isGeminiVideoTask(task)) return queryGeminiVideoUpstream(task, origin, cookie, workerUserId);
+    if (task.config.advancedConfig?.protocol === "comfyui") return queryComfyUiVideoUpstream(task);
     const data = await queryVideoUpstream(task, origin, cookie, workerUserId);
     const status = readVideoProviderStatus(data, task.config.advancedConfig?.statusField);
     const resultUrl = readVideoProviderUrl(data, task.config.advancedConfig?.resultField);
@@ -89,14 +91,15 @@ async function completeVideoTask(task: VideoTask, resultUrl: string, origin: str
     });
     await updateVideoTask(task.id, { attempts });
     const channelId = task.config.channelId || systemGenerationChannelId(task.config.baseUrl);
+    const providerResultUrl = comfyUiResultUrl(task, resultUrl);
     const workerHeaders = new Headers(workerUserId ? maintenanceWorkerHeaders(workerUserId) : undefined);
-    if (/^https?:\/\//i.test(resultUrl) && channelId) {
-        Object.entries(generationMediaProxyHeaders({ userId: task.userId, taskType: "video", taskId: task.id, channelId, upstreamModel: task.config.model, url: resultUrl })).forEach(([key, value]) => workerHeaders.set(key, value));
+    if (/^https?:\/\//i.test(providerResultUrl) && channelId) {
+        Object.entries(generationMediaProxyHeaders({ userId: task.userId, taskType: "video", taskId: task.id, channelId, upstreamModel: task.config.model, url: providerResultUrl })).forEach(([key, value]) => workerHeaders.set(key, value));
     }
     const result = task.result?.url
         ? task.result
         : await normalizeVideoResult({
-              url: videoProviderMediaUrl(task.config.baseUrl, resultUrl),
+              url: videoProviderMediaUrl(task.config.baseUrl, providerResultUrl),
               origin,
               cookie,
               internalHeaders: workerHeaders,
@@ -118,6 +121,13 @@ async function completeVideoTask(task: VideoTask, resultUrl: string, origin: str
     await writeVideoGenerationLog(completed, "success");
     await registerVideoAsset(completed);
     return completed;
+}
+
+function comfyUiResultUrl(task: VideoTask, resultUrl: string) {
+    if (task.config.advancedConfig?.protocol !== "comfyui" || /^https?:\/\//i.test(resultUrl)) return resultUrl;
+    const baseUrl = task.config.providerBaseUrl?.trim();
+    if (!baseUrl) return resultUrl;
+    return new URL(resultUrl, `${baseUrl.replace(/\/+$/, "")}/`).toString();
 }
 
 async function failVideoTask(task: VideoTask, error: string, retryable = true) {
@@ -224,4 +234,41 @@ function globalAiOpcPreset(task: VideoTask) {
 
 function isGeminiVideoTask(task: VideoTask) {
     return task.config.apiFormat === "gemini" && task.config.advancedConfig?.protocol !== "globalaiopc";
+}
+
+async function queryComfyUiVideoUpstream(task: VideoTask): Promise<VideoUpstreamStep> {
+    const promptId = task.upstream.id.replace(/^prompt:/, "");
+    const baseUrl = task.config.providerBaseUrl || task.config.baseUrl.replace(/^\/api\/ai\/system\/[^/]+\/?/, "http://127.0.0.1:8188");
+    const response = await fetchSafeOutbound(`${baseUrl}/history/${promptId}`, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) {
+        if (response.status === 404) return { state: "failed", status: "not_found", error: "ComfyUI 任务不存在" };
+        throw new Error(`ComfyUI 查询失败：${response.status}`);
+    }
+    const history = (await response.json()) as Record<
+        string,
+        { status?: { completed?: boolean; messages?: Array<[string, unknown]> }; outputs?: Record<string, { videos?: Array<{ filename: string; subfolder?: string; type?: string }>; gifs?: Array<{ filename: string; subfolder?: string; type?: string }> }> }
+    >;
+    const entry = history[promptId];
+    if (!entry) return { state: "pending", status: "queued" };
+    const completed = entry.status?.completed === true;
+    const messages = entry.status?.messages || [];
+    const errorMessage = messages.find((m) => m[0] === "execution_error")?.[1];
+    if (errorMessage && typeof errorMessage === "object" && "exception_message" in errorMessage) {
+        return { state: "failed", status: "error", error: String(errorMessage.exception_message || "ComfyUI 执行失败") };
+    }
+    if (!completed) return { state: "pending", status: "processing" };
+    const outputs = entry.outputs || {};
+    for (const nodeOutputs of Object.values(outputs)) {
+        const videos = [...(nodeOutputs.videos || []), ...(nodeOutputs.gifs || [])];
+        if (videos.length > 0 && videos[0].filename) {
+            const video = videos[0];
+            const params = new URLSearchParams({ filename: video.filename, type: video.type || "output" });
+            if (video.subfolder) params.set("subfolder", video.subfolder);
+            return { state: "result_ready", status: "completed", resultUrl: `${baseUrl}/view?${params.toString()}` };
+        }
+    }
+    return { state: "failed", status: "completed", error: "ComfyUI 任务完成但未生成视频" };
 }

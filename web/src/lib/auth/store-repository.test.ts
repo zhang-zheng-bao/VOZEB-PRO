@@ -41,6 +41,14 @@ describe("PostgreSQL auth read paths", () => {
         });
     });
 
+    it("normalizes persisted Agent prompts and provides defaults for missing surfaces", () => {
+        const settings = mapPostgresSettings({ agent_prompts: { canvas: "你是自定义画布助手。" } }, [], []);
+
+        expect(settings.agentPrompts.canvas).toBe("你是自定义画布助手。");
+        expect(settings.agentPrompts.chat).toBeTruthy();
+        expect(POSTGRESQL_SCHEMA_SQL).toContain("agent_prompts jsonb");
+    });
+
     it("normalizes persisted generation cost controls", () => {
         const settings = mapPostgresSettings({ generation_cost_control: { maxPointsPerTask: 1.7, dailyUserPointSpend: 20, dailyTotalPointSpend: 100 } }, [], []);
 

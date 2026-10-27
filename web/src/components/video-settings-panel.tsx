@@ -24,6 +24,7 @@ const sizeOptions = [
 
 const defaultSecondOptions = [5, 10];
 const legacyDefaultSecondKeys = new Set(["12", "16"]);
+const grokSecondOptions = [6, 10, 15];
 
 type VideoSettingsPanelProps = {
     config: AiConfig;
@@ -38,7 +39,7 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
         return <SeedanceVideoSettingsPanel config={config} onConfigChange={onConfigChange} theme={theme} showTitle={showTitle} className={className} />;
     }
 
-    const seconds = config.videoSeconds || "5";
+    const seconds = normalizeVisibleVideoSeconds(config.videoSeconds || "5", config);
     const secondOptions = videoSecondOptionsFromConfig(config);
     const size = normalizeVideoSizeValue(config.size);
     const dimensions = readSizeDimensions(size);
@@ -94,7 +95,7 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                                 {value}s
                             </OptionPill>
                         ))}
-                        <NumberInput value={seconds} min={1} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
+                        <NumberInput value={seconds} min={minimumVideoSeconds(config)} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
                     </div>
                 </SettingGroup>
             </div>
@@ -185,16 +186,34 @@ export function videoSecondsLabel(value: string) {
 }
 
 export function videoSecondOptionsFromConfig(config: AiConfig, allowAuto = false, maxSeconds?: number) {
+    const minimum = minimumVideoSeconds(config);
     const multipliers = config.generationPointMultipliers?.videoSeconds || {};
     const customOptions = Object.entries(multipliers)
         .map(([key, multiplier]) => ({ seconds: Number(key), key, multiplier: Number(multiplier) }))
         .filter((item) => Number.isFinite(item.seconds) && Number.isInteger(item.seconds) && (allowAuto ? item.seconds >= -1 : item.seconds > 0))
         .filter((item) => item.seconds !== -1 || allowAuto)
+        .filter((item) => item.seconds === -1 || item.seconds >= minimum)
         .filter((item) => item.seconds === -1 || maxSeconds === undefined || item.seconds <= maxSeconds)
         .filter((item) => !legacyDefaultSecondKeys.has(item.key) || item.multiplier !== 1)
         .map((item) => item.seconds);
-    const values = Array.from(new Set([...(allowAuto && customOptions.includes(-1) ? [-1] : []), ...defaultSecondOptions.filter((value) => maxSeconds === undefined || value <= maxSeconds), ...customOptions.filter((value) => value > 0)]));
+    const defaults = isGrokVideoConfig(config) ? grokSecondOptions : defaultSecondOptions;
+    const values = Array.from(new Set([...(allowAuto && customOptions.includes(-1) ? [-1] : []), ...defaults.filter((value) => value >= minimum && (maxSeconds === undefined || value <= maxSeconds)), ...customOptions.filter((value) => value > 0)]));
     return values.sort((a, b) => (a === -1 ? -1 : b === -1 ? 1 : a - b));
+}
+
+function normalizeVisibleVideoSeconds(value: string, config: AiConfig) {
+    const seconds = Number(value);
+    const minimum = minimumVideoSeconds(config);
+    return Number.isFinite(seconds) && seconds > 0 && seconds < minimum ? String(minimum) : value;
+}
+
+function minimumVideoSeconds(config: AiConfig) {
+    return isGrokVideoConfig(config) ? 6 : 1;
+}
+
+function isGrokVideoConfig(config: AiConfig) {
+    const model = config.videoModel || config.model || "";
+    return model ? modelOptionName(model).toLowerCase().includes("grok-imagine-video") : false;
 }
 
 export function normalizeVideoSizeValue(value: string) {

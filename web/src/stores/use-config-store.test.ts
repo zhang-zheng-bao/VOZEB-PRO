@@ -27,6 +27,24 @@ const audioSettings: PublicSystemSettings = {
 };
 
 describe("applyPublicSystemSettings", () => {
+    it("includes a no-auth ComfyUI video model marked ready by public settings", () => {
+        const config = applyPublicSystemSettings(defaultConfig, {
+            systemChannels: [{ id: "comfyui", name: "ComfyUI", baseUrl: "/api/ai/system/comfyui", apiKey: "system", apiFormat: "openai", models: ["minimax-h3-multi-reference"], enabled: true, hasApiKey: true }],
+            logicalModels: [
+                {
+                    id: "comfyui-minimax-h3",
+                    name: "ComfyUI MiniMax H3",
+                    capability: "video",
+                    enabled: true,
+                    bindings: [{ id: "comfyui-binding", channelId: "comfyui", upstreamModel: "minimax-h3-multi-reference", enabled: true, priority: 1 }],
+                },
+            ],
+        });
+
+        expect(config.videoModels).toContain("comfyui-minimax-h3");
+        expect(modelOptionLabel(config, "comfyui-minimax-h3")).toBe("ComfyUI MiniMax H3");
+    });
+
     it("does not reuse a persisted audio model when the administrator has no default", () => {
         const config = applyPublicSystemSettings({ ...defaultConfig, audioModel: "speech-v1" }, audioSettings);
 
@@ -113,6 +131,15 @@ describe("applyPublicSystemSettings", () => {
         expect(config.canvasImageCount).toBe("11");
         expect(config.count).toBe("12");
     });
+
+    it("hides discontinued RunningHub video models and falls back to a usable model", () => {
+        const config = applyPublicSystemSettings({ ...defaultConfig, videoModel: "rh-video-xai-grok-imagine-video-reference-to-video-official-stable-d29de666" }, runningHubVideoSettings());
+
+        expect(config.videoModels).toEqual(["rh-video-xai-grok-imagine-video-v1-5-reference-to-video-official-stable-4143e17c", "rh-video-vidu-image-to-video-q2-pro-de2056b6"]);
+        expect(config.videoModel).toBe("rh-video-xai-grok-imagine-video-v1-5-reference-to-video-official-stable-4143e17c");
+        expect(config.models).not.toContain("rh-video-xai-grok-imagine-video-reference-to-video-official-stable-d29de666");
+        expect(config.models).not.toContain("rh-video-vidu-image-to-video-q2-turbo-1f3cb21b");
+    });
 });
 
 function rawModelSettings(): PublicSystemSettings {
@@ -165,6 +192,54 @@ function misleadingVideoNameSettings(): PublicSystemSettings {
                 capability: "video",
                 enabled: true,
                 bindings: [{ id: "video-binding", channelId: "mixed-channel", upstreamModel: "video-v1", enabled: true, priority: 1 }],
+            },
+        ],
+    };
+}
+
+function runningHubVideoSettings(): PublicSystemSettings {
+    return {
+        systemChannels: [
+            {
+                id: "runninghub-video",
+                name: "RunningHub 视频",
+                baseUrl: "https://www.runninghub.ai",
+                apiKey: "",
+                apiFormat: "openai",
+                models: ["xai/grok-imagine-video/reference-to-video-official-stable", "xai/grok-imagine-video-v1.5/reference-to-video-official-stable", "Vidu-image-to-video-q2-turbo", "Vidu-image-to-video-q2-pro"],
+                enabled: true,
+                hasApiKey: true,
+            },
+        ],
+        defaultModels: { videoModel: "rh-video-xai-grok-imagine-video-reference-to-video-official-stable-d29de666" },
+        logicalModels: [
+            {
+                id: "rh-video-xai-grok-imagine-video-reference-to-video-official-stable-d29de666",
+                name: "Grok v1 旧全能参考",
+                capability: "video",
+                enabled: true,
+                bindings: [{ id: "old-grok", channelId: "runninghub-video", upstreamModel: "xai/grok-imagine-video/reference-to-video-official-stable", enabled: true, priority: 1 }],
+            },
+            {
+                id: "rh-video-xai-grok-imagine-video-v1-5-reference-to-video-official-stable-4143e17c",
+                name: "Grok v1.5 全能参考",
+                capability: "video",
+                enabled: true,
+                bindings: [{ id: "new-grok", channelId: "runninghub-video", upstreamModel: "xai/grok-imagine-video-v1.5/reference-to-video-official-stable", enabled: true, priority: 2 }],
+            },
+            {
+                id: "rh-video-vidu-image-to-video-q2-turbo-1f3cb21b",
+                name: "Vidu Q2 Turbo",
+                capability: "video",
+                enabled: true,
+                bindings: [{ id: "vidu-turbo", channelId: "runninghub-video", upstreamModel: "Vidu-image-to-video-q2-turbo", enabled: true, priority: 3 }],
+            },
+            {
+                id: "rh-video-vidu-image-to-video-q2-pro-de2056b6",
+                name: "Vidu Q2 Pro",
+                capability: "video",
+                enabled: true,
+                bindings: [{ id: "vidu-pro", channelId: "runninghub-video", upstreamModel: "Vidu-image-to-video-q2-pro", enabled: true, priority: 4 }],
             },
         ],
     };

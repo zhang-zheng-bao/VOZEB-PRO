@@ -19,6 +19,14 @@ export function createMyPrompt(input: { title: string; prompt: string; category?
     }).then((data) => data.prompt);
 }
 
+export function updateMyPrompt(id: string, input: { title: string; prompt: string; category?: string; tags?: string[]; coverUrl?: string; preview?: string }) {
+    return request<{ prompt: Prompt }>(`/api/my-prompts/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+    }).then((data) => data.prompt);
+}
+
 export function deleteMyPrompt(id: string) {
     return request<{ ok: boolean }>(`/api/my-prompts/${encodeURIComponent(id)}`, { method: "DELETE" });
 }

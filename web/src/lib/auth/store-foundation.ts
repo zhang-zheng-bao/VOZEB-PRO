@@ -1,6 +1,7 @@
 import { ECOMMERCE_IMAGE_SKILL } from "@/lib/server/agent-skills/ecommerce-image";
 import { YANAI_BEAUTY_SKILL } from "@/lib/server/agent-skills/yanai-beauty";
 import { DEFAULT_CREATIVE_SHORTCUT_SKILLS } from "@/lib/server/agent-skills/creative-shortcuts";
+import { DEFAULT_AGENT_PROMPTS } from "@/lib/agent-prompt-defaults";
 import {
     type UserRole,
     type UserStatus,
@@ -82,13 +83,13 @@ export const EMAIL_CODE_RESEND_COOLDOWN_MS = 1000 * 60;
 export const DEFAULT_USER_POINTS = 0;
 export const DEFAULT_MODEL_POINT_COST_KEY = "__default__";
 export const DEFAULT_SITE_SETTINGS: SiteSettings = {
-    title: "VOZEB PRO",
-    logoUrl: "/logo.svg",
-    iconUrl: "/icon.svg",
-    seoTitle: "VOZEB PRO",
+    title: "万创核心",
+    logoUrl: "/wanchuang-core-logo.png",
+    iconUrl: "/wanchuang-core-icon.png",
+    seoTitle: "万创核心",
     seoDescription: "面向 Agent、图片、视频、画布与短剧生产的一体化 AI 创作工作台",
-    seoKeywords: "VOZEB PRO,AI Agent,AI 绘图,AI 视频,画布,短剧,提示词库,素材管理",
-    footerCopyright: "© 2026 VOZEB PRO. All rights reserved.",
+    seoKeywords: "万创核心,AI Agent,AI 绘图,AI 视频,画布,短剧,提示词库,素材管理",
+    footerCopyright: "© 2026 万创核心",
     termsUrl: "/terms",
     termsVersion: "1.0",
     privacyUrl: "/privacy",
@@ -104,7 +105,7 @@ export const DEFAULT_MAIL_SETTINGS: MailSettings = {
     username: "",
     password: "",
     fromEmail: "",
-    fromName: "VOZEB PRO",
+    fromName: "万创核心",
 };
 export const DEFAULT_GENERATION_POINT_MULTIPLIERS: GenerationPointMultipliers = {
     imageQuality: { auto: 1, low: 1, medium: 1, high: 1 },
@@ -173,6 +174,7 @@ export const DEFAULT_SETTINGS: AuthSettings = {
     systemChannels: [],
     logicalModels: [],
     defaultModels: { imageModel: "", videoModel: "", textModel: "", audioModel: "" },
+    agentPrompts: { ...DEFAULT_AGENT_PROMPTS },
     agentSkills: [
         { ...ECOMMERCE_IMAGE_SKILL, keywords: [...ECOMMERCE_IMAGE_SKILL.keywords], workspaces: [...ECOMMERCE_IMAGE_SKILL.workspaces] },
         { ...YANAI_BEAUTY_SKILL, keywords: [...YANAI_BEAUTY_SKILL.keywords], workspaces: [...YANAI_BEAUTY_SKILL.workspaces] },

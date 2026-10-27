@@ -1,6 +1,7 @@
 import { DEFAULT_SITE_SETTINGS, getPublicUserSummary } from "@/lib/auth/store";
 import { getDatabaseProvider, getPostgresConnectionString, initializePostgresSchema, postgresQuery } from "@/lib/server/database";
 import { assertInstallToken, getInstallTokenStatus, InstallTokenError } from "@/lib/server/install-token";
+import { isPersonalMode } from "@/lib/server/personal-mode";
 import { getEncryptionKeyStatus } from "@/lib/server/secret-crypto";
 
 export type InstallStatus = {
@@ -216,6 +217,14 @@ export class InstallInitializationError extends Error {
 
 function buildStatus(input: Omit<InstallStatus, "ready" | "firstAdminRequired" | "site">): InstallStatus {
     const runtimeReady = input.database.healthy && input.database.schemaReady && input.security.encryptionReady;
+    if (isPersonalMode()) {
+        return {
+            ...input,
+            ready: runtimeReady,
+            firstAdminRequired: false,
+            site: DEFAULT_SITE_SETTINGS,
+        };
+    }
     const firstAdminRequired = runtimeReady && input.security.installTokenReady && input.userCount === 0;
     return {
         ...input,

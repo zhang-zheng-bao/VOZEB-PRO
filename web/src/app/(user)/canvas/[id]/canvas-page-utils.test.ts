@@ -16,7 +16,7 @@ vi.mock("@/services/image-storage", async (importOriginal) => ({
     uploadImage: mocks.uploadImage,
 }));
 
-import { applyNodeConfigPatch, getGenerationCount, hydrateAssistantImages, hydrateCanvasImages, normalizeCanvasConfigNodeLayout, replaceCanvasNodeMediaMetadata } from "./canvas-page-utils";
+import { applyNodeConfigPatch, getGenerationCount, hydrateAssistantImages, hydrateCanvasImages, normalizeCanvasConfigNodeLayout, normalizeRestoredCanvasNodeState, replaceCanvasNodeMediaMetadata } from "./canvas-page-utils";
 
 describe("Canvas project hydration", () => {
     beforeEach(() => {
@@ -84,6 +84,43 @@ describe("Canvas config node layout", () => {
         expect(getGenerationCount("120")).toBe(120);
         expect(getGenerationCount("0")).toBe(1);
         expect(getGenerationCount("-2")).toBe(1);
+    });
+
+    it("does not restore a stale generation review warning as an active canvas error", () => {
+        const node: CanvasNodeData = {
+            ...imageNode("review", "valid-image"),
+            type: CanvasNodeType.Video,
+            metadata: {
+                status: "needs_review",
+                errorDetails: "上游提交结果不确定",
+                prompt: "保留提示词",
+                videoTask: { id: "old-task", provider: "generation", model: "old-model" },
+            },
+        };
+
+        expect(normalizeRestoredCanvasNodeState(node)).toMatchObject({
+            metadata: { status: "idle", prompt: "保留提示词" },
+        });
+        expect(normalizeRestoredCanvasNodeState(node).metadata?.errorDetails).toBeUndefined();
+        expect(normalizeRestoredCanvasNodeState(node).metadata?.videoTask).toBeUndefined();
+    });
+
+    it("resumes a failed-looking video node when its original task is still attached", () => {
+        const node: CanvasNodeData = {
+            ...imageNode("video-recovery", ""),
+            type: CanvasNodeType.Video,
+            metadata: {
+                status: "error",
+                errorDetails: "Failed to fetch",
+                videoTask: { id: "original-task", provider: "generation", model: "comfyui-minimax-h3" },
+            },
+        };
+
+        expect(normalizeRestoredCanvasNodeState(node).metadata).toMatchObject({
+            status: "loading",
+            videoTask: { id: "original-task" },
+        });
+        expect(normalizeRestoredCanvasNodeState(node).metadata?.errorDetails).toBeUndefined();
     });
 });
 

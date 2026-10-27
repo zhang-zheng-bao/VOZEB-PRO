@@ -103,6 +103,16 @@ describe("admin settings model routing", () => {
         expect(mocks.safeRecordAuditLog).toHaveBeenCalledWith(expect.objectContaining({ metadata: { fields: ["generationCostControl"] } }));
     });
 
+    it("accepts editable Agent system prompts", async () => {
+        const agentPrompts = { chat: "统一助手", canvas: "画布助手", drama: "短剧助手" };
+
+        const response = await PATCH(request({ agentPrompts }));
+
+        expect(response.status).toBe(200);
+        expect(mocks.setAuthSettings).toHaveBeenCalledWith({ agentPrompts });
+        expect(mocks.safeRecordAuditLog).toHaveBeenCalledWith(expect.objectContaining({ metadata: { fields: ["agentPrompts"] } }));
+    });
+
     it("accepts administrator-configured technical data lifecycle controls", async () => {
         const dataLifecycle = { cleanupExpiredSessions: true, cleanupExpiredEmailCodes: true, cleanupExpiredGenerationTasks: false, cleanupExpiredTemporaryMedia: true, maintenanceBatchSize: 80 };
 

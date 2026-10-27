@@ -445,6 +445,19 @@ describe("split Postgres repositories", () => {
         expect(params).toEqual([JSON.stringify(generationCostControl)]);
     });
 
+    it("persists editable Agent prompts as structured settings", async () => {
+        const timestamp = "2026-01-01T00:00:00.000Z";
+        const agentPrompts = { chat: "统一助手", canvas: "画布助手", drama: "短剧助手" };
+        const { executor, query } = mockExecutor([[{ id: "default", agent_prompts: agentPrompts, created_at: timestamp, updated_at: timestamp }]]);
+
+        const settings = await createPostgresRepositories(executor).settings.updateSettings({ agentPrompts });
+        const [sql, params] = queryArgs(query, 0) as [string, unknown[]];
+
+        expect(settings.agentPrompts).toEqual(agentPrompts);
+        expect(sql).toContain("agent_prompts = $1");
+        expect(params).toEqual([JSON.stringify(agentPrompts)]);
+    });
+
     it("persists bounded technical data lifecycle settings", async () => {
         const timestamp = "2026-01-01T00:00:00.000Z";
         const dataLifecycle = { cleanupExpiredSessions: true, cleanupExpiredEmailCodes: true, cleanupExpiredGenerationTasks: false, cleanupExpiredTemporaryMedia: true, maintenanceBatchSize: 80 };

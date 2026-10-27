@@ -5,11 +5,11 @@ import { browserIconHref } from "./site-metadata";
 
 describe("site metadata", () => {
     it("keeps the bundled browser icon on the same origin", () => {
-        expect(browserIconHref(DEFAULT_SITE_SETTINGS)).toBe("/icon.svg");
+        expect(browserIconHref(DEFAULT_SITE_SETTINGS)).toBe("/wanchuang-core-icon.png");
     });
 
     it("uses a custom logo when the browser icon is still the bundled default", () => {
-        expect(browserIconHref({ iconUrl: "/icon.svg", logoUrl: "/custom-logo.svg" })).toBe("/custom-logo.svg");
+        expect(browserIconHref({ iconUrl: "/wanchuang-core-icon.png", logoUrl: "/custom-logo.svg" })).toBe("/custom-logo.svg");
     });
 
     it("keeps an independently configured browser icon", () => {

@@ -6,7 +6,7 @@ import type { AdminSectionKey } from "@/components/admin/admin-sections";
 import { toNumberOrZero } from "@/components/admin/admin-values";
 import type { TableColumnsType } from "antd";
 import { Button, Popconfirm, Space, Tag } from "antd";
-import { Copy, Eye, SlidersHorizontal, Trash2 } from "lucide-react";
+import { Copy, Eye, Pencil, SlidersHorizontal, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { AdminAccountId, AdminUserIdentity } from "@/components/admin/admin-user-identity";
@@ -49,7 +49,7 @@ import type { AdminDashboardState, UserEditorValue } from "./use-admin-dashboard
 
 export function useAdminDashboardTableModel({ state, data, settingsActions }: { state: AdminDashboardState; data: AdminDashboardDataActions; settingsActions: AdminDashboardSettingsActions }) {
     const { currentUser, setupSummary, userForm, settings, updatingUserId, deletingPromptId, setViewingGenerationLog, setViewingCdkCode, editingUser, setEditingUser, creatingUser, setCreatingUser, activeSection } = state;
-    const { updateUser, createUser, deleteUser, deletePrompt, deleteGenerationLogsByIds, deleteCdkById, copyCdkPlainCode } = data;
+    const { updateUser, createUser, deleteUser, deletePrompt, openPromptEditor, deleteGenerationLogsByIds, deleteCdkById, copyCdkPlainCode } = data;
     const {} = settingsActions;
     const canManageUsers = hasAdminPermission(currentUser, "users.manage");
     const canManageAdministrators = hasAdminPermission(currentUser, "administrators.manage");
@@ -269,11 +269,14 @@ export function useAdminDashboardTableModel({ state, data, settingsActions }: { 
         { title: "分类", dataIndex: "category", width: 140 },
         {
             title: "操作",
-            width: 90,
+            width: 120,
             render: (_, record) => (
-                <Popconfirm title="删除公共提示词？" okText="删除" cancelText="取消" onConfirm={() => deletePrompt(record.id)}>
-                    <Button size="small" danger loading={deletingPromptId === record.id} icon={<Trash2 className="size-3.5" />} aria-label={`删除提示词 ${record.title}`} title={`删除提示词 ${record.title}`} />
-                </Popconfirm>
+                <Space size={6}>
+                    <Button size="small" icon={<Pencil className="size-3.5" />} onClick={() => openPromptEditor(record)} aria-label={`编辑提示词 ${record.title}`} title={`编辑提示词 ${record.title}`} />
+                    <Popconfirm title="删除公共提示词？" okText="删除" cancelText="取消" onConfirm={() => deletePrompt(record.id)}>
+                        <Button size="small" danger loading={deletingPromptId === record.id} icon={<Trash2 className="size-3.5" />} aria-label={`删除提示词 ${record.title}`} title={`删除提示词 ${record.title}`} />
+                    </Popconfirm>
+                </Space>
             ),
         },
     ];

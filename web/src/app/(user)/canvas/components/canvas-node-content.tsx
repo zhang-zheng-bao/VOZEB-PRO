@@ -38,7 +38,7 @@ export type NodeContentRendererProps = {
 export function NodeContent(props: NodeContentRendererProps) {
     if (props.node.type === CanvasNodeType.Config && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.isBatchRoot) return <ImageNodeContent {...props} />;
-    if (props.node.metadata?.status === "loading") return <LoadingContent theme={props.theme} />;
+    if (props.node.metadata?.status === "loading") return <LoadingContent node={props.node} theme={props.theme} />;
     if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
     if (props.node.metadata?.status === "needs_review") return <ReviewContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
     if (props.node.metadata?.status === "cancelled") return <CancelledContent theme={props.theme} />;
@@ -163,13 +163,45 @@ export function BrandKitNodeContent({ node, theme }: NodeContentRendererProps) {
     );
 }
 
-export function LoadingContent({ theme }: Pick<NodeContentRendererProps, "theme">) {
+export function LoadingContent({ node, theme }: Pick<NodeContentRendererProps, "node" | "theme">) {
+    const model = shortModelLabel(node.metadata?.model || node.metadata?.videoTask?.model || node.metadata?.imageTask?.model || node.metadata?.audioTask?.model || node.metadata?.textTask?.model || "");
+    const Icon = node.type === CanvasNodeType.Video ? Video : node.type === CanvasNodeType.Audio ? Music2 : node.type === CanvasNodeType.Image || node.type === CanvasNodeType.Panorama ? ImageIcon : RefreshCw;
     return (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.activeStroke }}>
-            <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
-            <span className="text-[10px] tracking-[0.2em]">生成中</span>
+        <div className="flex h-full w-full flex-col items-center justify-center gap-2.5 px-4 text-center" style={{ color: theme.node.activeStroke }}>
+            <div className="relative grid size-12 place-items-center">
+                <div className="absolute inset-0 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
+                <Icon className="size-4.5" />
+            </div>
+            <span className="text-[10px] tracking-[0.16em]">生成中</span>
+            {model ? (
+                <span className="max-w-full truncate rounded-full border px-2 py-0.5 text-[10px] font-medium tracking-normal" style={{ background: theme.node.subtleSurface, borderColor: theme.node.subtleBorder, color: theme.node.subtleText }}>
+                    {model}
+                </span>
+            ) : null}
         </div>
     );
+}
+
+function shortModelLabel(value: string) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const name = raw
+        .replace(/^rh-video-/i, "")
+        .replace(/^RH\s*视频\s*-\s*/i, "")
+        .replace(/-[a-f0-9]{8}$/i, "")
+        .replace(/_/g, "-");
+    if (/vidu.*q2.*pro/i.test(name)) return /fast/i.test(name) ? "Vidu Q2 Pro Fast" : "Vidu Q2 Pro";
+    if (/vidu.*q2.*turbo/i.test(name)) return "Vidu Q2 Turbo";
+    if (/seedance.*2.*fast/i.test(name)) return "Seedance 2 Fast";
+    if (/wan.*2[.-]7/i.test(name)) return "Wan 2.7";
+    if (/wan.*2[.-]6/i.test(name)) return "Wan 2.6";
+    return name
+        .replace(/(?:image|text|reference)-to-video/gi, "")
+        .replace(/official-stable/gi, "")
+        .replace(/channel-low-price/gi, "")
+        .replace(/-+/g, " ")
+        .trim()
+        .slice(0, 28);
 }
 
 export function ErrorContent({ node, theme, onRetry }: Pick<NodeContentRendererProps, "node" | "theme" | "onRetry">) {
@@ -200,7 +232,7 @@ export function ReviewContent({ node, theme, onRetry }: Pick<NodeContentRenderer
         <div className="flex h-full w-full flex-col items-center justify-center gap-3 overflow-hidden px-5 py-4 text-center">
             <Clock3 className="size-6 shrink-0" style={{ color: theme.node.warningText }} />
             <div className="max-h-[55%] max-w-[280px] overflow-y-auto text-xs leading-5" style={{ color: theme.node.text }}>
-                {node.metadata?.errorDetails || "任务创建结果待管理员确认，系统未重复提交。"}
+                {node.metadata?.errorDetails || "任务创建结果待你确认，系统未重复提交。"}
             </div>
             <button
                 type="button"
@@ -296,7 +328,7 @@ export function ImageNodeContent(props: NodeContentRendererProps) {
     if (!props.node.metadata?.content && props.isBatchRoot) {
         const content =
             props.node.metadata?.status === "loading" ? (
-                <LoadingContent theme={props.theme} />
+                <LoadingContent node={props.node} theme={props.theme} />
             ) : props.node.metadata?.status === "error" ? (
                 <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />
             ) : props.node.metadata?.status === "cancelled" ? (

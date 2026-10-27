@@ -197,6 +197,7 @@ class SettingsRepository {
         if (input.paymentConfig !== undefined) add("payment_config", jsonParam(input.paymentConfig));
         if (input.logicalModels !== undefined) add("logical_models", jsonParam(input.logicalModels));
         if (input.defaultModels !== undefined) add("default_models", jsonParam(input.defaultModels));
+        if (input.agentPrompts !== undefined) add("agent_prompts", jsonParam(input.agentPrompts));
         if (input.agentSkills !== undefined) add("agent_skills", jsonParam(input.agentSkills));
         if (input.freeDailyPoints !== undefined) add("free_daily_points", input.freeDailyPoints);
         if (!assignments.length) throw new Error("Settings update requires at least one field");
@@ -299,6 +300,7 @@ function mapSettings(row: Record<string, unknown>): AppSettingsRecord {
         paymentConfig: jsonValue(row.payment_config),
         logicalModels: jsonValue(row.logical_models),
         defaultModels: jsonValue(row.default_models),
+        agentPrompts: jsonValue(row.agent_prompts),
         agentSkills: jsonValue(row.agent_skills),
         createdAt: isoValue(row.created_at),
         updatedAt: isoValue(row.updated_at),

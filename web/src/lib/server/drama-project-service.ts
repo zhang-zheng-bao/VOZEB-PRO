@@ -202,6 +202,11 @@ export function normalizeProject(value: unknown, current: DramaProject): DramaPr
         title: cleanText(input.title) || current.title,
         summary: cleanText(input.summary),
         style: cleanText(input.style),
+        visualStylePresetId: optionalText(input.visualStylePresetId),
+        visualStylePrompt: optionalText(input.visualStylePrompt),
+        promptTemplates: normalizePromptTemplates(input.promptTemplates),
+        assetImageModels: normalizeAssetImageModels(input.assetImageModels),
+        storyboardImageModel: optionalText(input.storyboardImageModel),
         ratio,
         status: input.status === "archived" ? "archived" : "active",
         creativeConversationId: current.creativeConversationId,
@@ -430,6 +435,27 @@ function normalizeVoiceProfile(value: unknown) {
         speed: Math.max(0.25, Math.min(4, Number(input.speed) || 1)),
         instructions: cleanText(input.instructions),
     };
+}
+
+function normalizePromptTemplates(value: unknown): DramaProject["promptTemplates"] {
+    const input = object(value);
+    const entries = (["character", "scene", "prop", "storyboard", "video"] as const).flatMap((kind) => {
+        const template = object(input[kind]);
+        const id = cleanText(template.id);
+        const title = cleanText(template.title);
+        const prompt = cleanText(template.prompt);
+        return id && title && prompt ? [[kind, { id, title, prompt }] as const] : [];
+    });
+    return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+function normalizeAssetImageModels(value: unknown): DramaProject["assetImageModels"] {
+    const input = object(value);
+    const entries = (["character", "scene", "prop"] as const).flatMap((kind) => {
+        const model = cleanText(input[kind]);
+        return model ? [[kind, model] as const] : [];
+    });
+    return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
 function normalizeContinuity(value: unknown): DramaShotContinuity {

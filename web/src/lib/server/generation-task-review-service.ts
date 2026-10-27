@@ -42,7 +42,7 @@ export async function reviewGenerationTask(type: ReviewableGenerationTaskType, i
         return { action: input.action, executionPhase: "result_ready" as const };
     }
 
-    const reason = clean(input.reason, 500) || "管理员已确认上游未创建任务";
+    const reason = clean(input.reason, 500) || "已确认上游未创建任务";
     await failTask(type, id, reason);
     await scheduleGenerationTask(type, id, { executionPhase: "completed", nextPollAt: undefined, lastUpstreamStatus: "manually_failed" });
     return { action: input.action, executionPhase: "completed" as const };

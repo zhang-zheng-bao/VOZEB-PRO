@@ -40,6 +40,7 @@
 
 ## 前端规范
 
+- Canvas 的 ComfyUI 服务器状态与切换入口只放在右上角全局操作区（移动端 Agent 全屏面板头部提供同一入口），不得在视频节点或其设置面板重复显示；ComfyUI 服务器模型在视频模型选择器中单列“服务器”分类，不混入云端模型分类。
 - 前端使用 Next.js App Router、React、TypeScript、Ant Design、Tailwind、Zustand。
 - 编写 Ant Design 相关代码时，参考 https://ant.design/llms-full.txt 理解组件 API、示例和设计规范，并优先结合项目当前 antd 版本与既有写法。
 - Ant Design 组件根节点可能覆盖 Tailwind 的 `display`、宽度和响应式布局；`Checkbox.Group`、`Select`、`Segmented` 等组件需要网格或断点尺寸时，使用普通 `div` 外壳控制布局，组件本身只负责控件行为。浏览器回归必须读取最终 `display`、行列坐标和宽度，禁止只统计列数或只检查源码 className。

@@ -18,6 +18,7 @@ vi.mock("@/lib/server/audio-task-refund", () => ({ refundAudioTask: mocks.refund
 vi.mock("@/lib/server/internal-origin", () => ({ fetchInternalApi: vi.fn(), resolveInternalOrigin: vi.fn(() => "http://localhost") }));
 vi.mock("@/lib/server/generation-channel", () => ({ generationModelId: vi.fn(() => "voice") }));
 vi.mock("@/lib/server/generation-task-recovery-service", () => ({ runGenerationTaskRecoveryBatch: mocks.recover }));
+vi.mock("@/lib/server/personal-mode", () => ({ isPersonalMode: vi.fn(() => true) }));
 
 import { after } from "next/server";
 import { GET, PATCH } from "./route";
@@ -46,13 +47,13 @@ describe("audio task cancellation refund", () => {
         expect(after).toHaveBeenCalledOnce();
     });
 
-    it("returns the manual review reason without waking the task", async () => {
+    it("hides manual review in personal mode and returns a retryable error", async () => {
         mocks.getAudioTask.mockResolvedValue({ ...task, executionPhase: "needs_review", reviewReason: "音频提交结果无法确认" });
 
         const response = await GET(new Request("http://localhost/api/audio-tasks/audio-one"), { params: Promise.resolve({ id: "audio-one" }) });
 
         expect(after).not.toHaveBeenCalled();
-        expect((await response.json()).task).toMatchObject({ needsReview: true, reviewReason: "音频提交结果无法确认" });
+        expect((await response.json()).task).toMatchObject({ status: "error", error: "音频提交结果无法确认", needsReview: false });
     });
 
     it("keeps billing refundable while cancellation awaits an upstream terminal state", async () => {

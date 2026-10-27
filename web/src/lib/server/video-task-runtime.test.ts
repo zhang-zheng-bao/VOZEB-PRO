@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
     touch: vi.fn(),
     update: vi.fn(),
     writeLog: vi.fn(),
+    fetchSafeOutbound: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/store", () => ({ refundUserPoints: mocks.refund }));
@@ -29,8 +30,9 @@ vi.mock("@/lib/server/video-task-store", () => ({
     updateVideoTask: mocks.update,
 }));
 vi.mock("@/lib/server/generation-media-authorization", () => ({ generationMediaProxyHeaders: vi.fn(() => ({ "x-media-auth": "signed" })) }));
+vi.mock("@/lib/server/safe-outbound-fetch", () => ({ fetchSafeOutbound: mocks.fetchSafeOutbound }));
 
-import { queryVideoTaskUpstream, refreshVideoTaskFromUpstream } from "./video-task-runtime";
+import { persistVideoTaskResult, queryVideoTaskUpstream, refreshVideoTaskFromUpstream } from "./video-task-runtime";
 import type { VideoTask } from "./video-task-store";
 import { createProtocolFixtureServer } from "../../../scripts/protocol-fixture-server.mjs";
 
@@ -188,6 +190,55 @@ describe("video task upstream reconciliation", () => {
         expect(mocks.complete).not.toHaveBeenCalled();
         expect(mocks.fail).not.toHaveBeenCalled();
         expect(mocks.refund).not.toHaveBeenCalled();
+    });
+
+    it("reads MP4 output emitted by VHS Video Combine in the gifs field", async () => {
+        const task = videoTask({
+            config: {
+                ...videoTask().config,
+                baseUrl: "http://127.0.0.1:18189",
+                providerBaseUrl: "http://127.0.0.1:18189",
+                advancedConfig: { protocol: "comfyui", queryPath: "/history/:id" } as NonNullable<VideoTask["config"]["advancedConfig"]>,
+            },
+            upstream: { ...videoTask().upstream, id: "prompt:prompt-one", queryPath: "/history/prompt-one" },
+        });
+        mocks.fetchSafeOutbound.mockResolvedValue(
+            json({
+                "prompt-one": {
+                    status: { completed: true },
+                    outputs: { "264": { gifs: [{ filename: "YZ_H3_一采_00001-audio.mp4", subfolder: "renders", type: "output" }] } },
+                },
+            }),
+        );
+
+        await expect(queryVideoTaskUpstream(task, "http://localhost", "", task.userId)).resolves.toEqual({
+            state: "result_ready",
+            status: "completed",
+            resultUrl: "http://127.0.0.1:18189/view?filename=YZ_H3_%E4%B8%80%E9%87%87_00001-audio.mp4&type=output&subfolder=renders",
+        });
+    });
+
+    it("persists a previously queued relative ComfyUI view URL through the authorized media proxy", async () => {
+        const task = videoTask({
+            config: {
+                ...videoTask().config,
+                baseUrl: "/api/ai/system/comfyui-server-8",
+                providerBaseUrl: "http://127.0.0.1:18189",
+                advancedConfig: { protocol: "comfyui", queryPath: "/history/:id" } as NonNullable<VideoTask["config"]["advancedConfig"]>,
+            },
+        });
+        const completed = { ...task, status: "success" as const, result: { url: "/api/reference-assets/result.mp4", mimeType: "video/mp4", durationMs: 5_000 } };
+        mocks.get.mockResolvedValue(task);
+        mocks.complete.mockResolvedValue(completed);
+
+        await expect(persistVideoTaskResult(task, "/view?filename=result.mp4&type=output", "http://localhost", "")).resolves.toEqual(completed);
+
+        expect(mocks.normalize).toHaveBeenCalledWith(
+            expect.objectContaining({
+                url: "/api/ai/system/comfyui-server-8/_media?url=http%3A%2F%2F127.0.0.1%3A18189%2Fview%3Ffilename%3Dresult.mp4%26type%3Doutput",
+                internalHeaders: expect.any(Headers),
+            }),
+        );
     });
 
     it("recovers a completed New API video from the standard content endpoint when status queries are unavailable", async () => {

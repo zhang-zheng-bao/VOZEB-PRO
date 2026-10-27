@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
 
-import { generationRuntimeEnvironment, resolveGenerationWorkerOrigin } from "./generation-runtime.mjs";
+import { describe, expect, it, vi } from "vitest";
+
+import { generationRuntimeEnvironment, resolveGenerationWorkerOrigin, superviseGenerationRuntime } from "./generation-runtime.mjs";
 
 describe("generation runtime environment", () => {
     it("uses distinct configured maintenance and worker tokens", () => {
@@ -27,5 +29,38 @@ describe("generation runtime environment", () => {
 
     it("normalizes a Render private hostport to an HTTP origin", () => {
         expect(resolveGenerationWorkerOrigin({ environment: { VOZEB_PRO_WORKER_API_ORIGIN: "vozeb-pro:3000" } })).toBe("http://vozeb-pro:3000");
+    });
+
+    it("keeps the web process alive and restarts a crashed generation worker", async () => {
+        const children = [];
+        const spawnProcess = vi.fn(() => {
+            const child = new EventEmitter();
+            child.exitCode = null;
+            child.signalCode = null;
+            child.kill = vi.fn((signal) => {
+                child.signalCode = signal;
+                queueMicrotask(() => child.emit("close", null));
+            });
+            children.push(child);
+            return child;
+        });
+        const runtime = superviseGenerationRuntime({
+            app: { command: "node", args: ["server.js"], cwd: "/app" },
+            workerScript: "/app/generation-worker.mjs",
+            environment: {},
+            spawnProcess,
+            workerRestartDelayMs: 0,
+        });
+
+        children[1].exitCode = 1;
+        children[1].emit("close", 1);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(spawnProcess).toHaveBeenCalledTimes(3);
+        expect(children[0].kill).not.toHaveBeenCalled();
+        children[0].exitCode = 0;
+        children[0].emit("close", 0);
+        await runtime;
+        expect(children[2].kill).toHaveBeenCalledWith("SIGTERM");
     });
 });

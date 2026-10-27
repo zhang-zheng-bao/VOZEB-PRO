@@ -7,6 +7,10 @@
     max-width: 100%;
 }
 
+.canvas-agent-server-control {
+    display: none;
+}
+
 .canvas-agent-message pre,
 .canvas-agent-message code {
     white-space: pre-wrap;
@@ -14,6 +18,12 @@
 }
 
 @media (max-width: 768px), (hover: none) and (pointer: coarse) {
+    .canvas-media-model-dropdown {
+        left: 16px !important;
+        right: 16px !important;
+        width: auto !important;
+    }
+
     .canvas-surface,
     .node-element {
         touch-action: none;
@@ -49,6 +59,10 @@
     .canvas-agent-panel header {
         padding-left: max(12px, env(safe-area-inset-left));
         padding-right: max(12px, env(safe-area-inset-right));
+    }
+
+    .canvas-agent-server-control {
+        display: grid;
     }
 
     .canvas-agent-panel .thin-scrollbar {

@@ -760,6 +760,57 @@ describe("custom protocol model routing", () => {
     });
 });
 
+describe("RunningHub OpenAPI proxy aliases", () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+        mocks.consumeUserPoints.mockReset().mockResolvedValue(undefined);
+        mocks.refundUserPoints.mockReset();
+        mocks.safeUrl.mockResolvedValue(true);
+        mocks.taskAccess.mockReset().mockResolvedValue(true);
+        mocks.getAuthSettings.mockResolvedValue({
+            generationPointMultipliers: {},
+            logicalModels: [logicalModel("rh-wan-image", "image", "wan-2.7/text-to-image")],
+            systemChannels: [
+                {
+                    id: "channel-one",
+                    enabled: true,
+                    baseUrl: "https://www.runninghub.ai",
+                    apiKey: "secret",
+                    apiFormat: "openai",
+                    models: ["wan-2.7/text-to-image"],
+                    advancedConfig: {
+                        protocol: "runninghub",
+                        modelConfigs: {
+                            "wan-2.7/text-to-image": {
+                                capability: "image",
+                                protocol: "runninghub",
+                                createPath: "/openapi/v2/wan-2.7/text-to-image",
+                                queryPath: "/openapi/v2/query/:task_id",
+                            },
+                        },
+                    },
+                },
+            ],
+        });
+    });
+
+    it("authorizes and forwards the real Alibaba path for a Wan image model while keeping the upstream model name", async () => {
+        const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ taskId: "rh-task-one", status: "queued" }));
+        const response = await POST(
+            new Request("http://localhost/api/ai/system/channel-one/openapi/v2/alibaba/wan-2.7/text-to-image", {
+                method: "POST",
+                headers: { "content-type": "application/json", ...systemModelHeaders("rh-wan-image", "wan-2.7/text-to-image") },
+                body: JSON.stringify({ prompt: "test image" }),
+            }),
+            { params: Promise.resolve({ channelId: "channel-one", path: ["openapi", "v2", "alibaba", "wan-2.7", "text-to-image"] }) },
+        );
+
+        expect(response.status).toBe(200);
+        expect(fetchMock.mock.calls[0]?.[0]).toBe("https://www.runninghub.ai/openapi/v2/alibaba/wan-2.7/text-to-image");
+        expect(mocks.consumeUserPoints).toHaveBeenCalledWith("user-one", "rh-wan-image", 1, "image", expect.any(String), expect.any(String));
+    });
+});
+
 describe("system proxy authorization", () => {
     beforeEach(() => {
         vi.restoreAllMocks();

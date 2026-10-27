@@ -77,6 +77,7 @@ function mergeSettings(current: AuthSettings, imported: AuthSettings): AuthSetti
         systemChannels: mergeRecords(current.systemChannels, imported.systemChannels, (channel) => channel.id, mergeSystemChannel),
         logicalModels: mergeRecords(current.logicalModels, imported.logicalModels, (model) => model.id, mergeLogicalModel),
         defaultModels: { ...current.defaultModels, ...imported.defaultModels },
+        agentPrompts: { ...current.agentPrompts, ...imported.agentPrompts },
         agentSkills: mergeRecords(current.agentSkills, imported.agentSkills, (skill) => skill.id),
     };
 }

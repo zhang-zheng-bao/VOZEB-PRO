@@ -1,12 +1,14 @@
 import type { NextRequest } from "next/server";
 
 import { workPublicationError, workPublicationOk } from "@/app/api/_shared/work-publication-response";
+import { isPersonalMode } from "@/lib/server/personal-mode";
 import { listPublicGallery } from "@/lib/server/work-governance-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
+    if (isPersonalMode()) return workPublicationOk({ items: [], nextCursor: undefined });
     try {
         const params = request.nextUrl.searchParams;
         return workPublicationOk(

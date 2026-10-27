@@ -122,6 +122,7 @@ export function useCanvasGenerationActions({ state, tasks, interactions }: { sta
                 return;
             }
             let pendingChildIds: string[] = [];
+            let submittedVideoTaskId: string | undefined;
             if (markSourceStatus) setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, prompt: statusPrompt, status: NODE_STATUS_LOADING, errorDetails: undefined } } : node)));
 
             try {
@@ -274,7 +275,7 @@ export function useCanvasGenerationActions({ state, tasks, interactions }: { sta
                         setNodes((prev) => prev.map((node) => (node.id === nodeId && isConfigNode && node.metadata?.status === NODE_STATUS_LOADING ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_IDLE, errorDetails: undefined } } : node)));
                         return;
                     }
-                    if (hasReview) message.warning("部分图片任务待管理员确认，系统未重复提交");
+                    if (hasReview) message.warning("部分图片任务待你确认，系统未重复提交");
                     if (hasFailure) message.error(hasSuccess ? "部分图片生成失败" : "全部图片生成失败");
                     setNodes((prev) =>
                         prev.map((node) =>
@@ -344,6 +345,7 @@ export function useCanvasGenerationActions({ state, tasks, interactions }: { sta
                             projectId,
                             ...createFreshGenerationTaskContext("canvas-video", [projectId, videoId]),
                         });
+                        submittedVideoTaskId = videoId;
                         setNodes((prev) => prev.map((node) => (node.id === videoId ? { ...node, metadata: { ...node.metadata, videoTask: task } } : node)));
                         await completeVideoTask(videoId, generationConfig, task, controller, effectivePrompt);
                     } finally {
@@ -463,7 +465,7 @@ export function useCanvasGenerationActions({ state, tasks, interactions }: { sta
                     pauseReviewedTasks(pendingChildIds, errorDetails);
                     return;
                 }
-                const videoTaskId = pendingChildIds.find((id) => nodesRef.current.find((item) => item.id === id)?.metadata?.videoTask);
+                const videoTaskId = submittedVideoTaskId || pendingChildIds.find((id) => nodesRef.current.find((item) => item.id === id)?.metadata?.videoTask);
                 const videoFailure = mode === "video" && videoTaskId ? classifyCanvasVideoTaskFailure(error) : undefined;
                 if (videoTaskId && videoFailure && videoFailure !== "upstream_failed") {
                     message.info("视频仍在后台生成，系统会继续查询原任务");
@@ -509,6 +511,11 @@ export function useCanvasGenerationActions({ state, tasks, interactions }: { sta
 
     const handleRetryNode = useCallback(
         async (node: CanvasNodeData) => {
+            if (node.type === CanvasNodeType.Video && node.metadata?.videoTask) {
+                setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined } } : item)));
+                message.info("正在查询原视频任务，不会重复提交");
+                return;
+            }
             if (node.metadata?.status === NODE_STATUS_NEEDS_REVIEW && hasCanvasGenerationTask(node)) {
                 setNodes((prev) => resumeCanvasGenerationReview(prev, node.id));
                 message.info("正在检查原任务状态，不会重复提交");
@@ -577,6 +584,7 @@ export function useCanvasGenerationActions({ state, tasks, interactions }: { sta
             setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined } } : item)));
             const controller = startGenerationRequest(node.id, sourceNode.id, node.id);
 
+            let submittedVideoTask = false;
             try {
                 if (node.type === CanvasNodeType.Text) {
                     if (!context) return;
@@ -603,6 +611,7 @@ export function useCanvasGenerationActions({ state, tasks, interactions }: { sta
                         projectId,
                         ...createFreshGenerationTaskContext("canvas-video-retry", [projectId, node.id]),
                     });
+                    submittedVideoTask = true;
                     setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, ...canvasVideoReferenceMetadata(videoReferences), videoTask: task } } : item)));
                     await completeVideoTask(node.id, generationConfig, task, controller, prompt);
                     return;
@@ -639,13 +648,36 @@ export function useCanvasGenerationActions({ state, tasks, interactions }: { sta
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
-                message.error(errorDetails);
                 if (isGenerationTaskNeedsReviewError(error)) {
+                    message.error(errorDetails);
                     pauseReviewedTasks([node.id], errorDetails);
                     return;
                 }
+                const hasVideoTask = submittedVideoTask || (node.type === CanvasNodeType.Video && Boolean(nodesRef.current.find((item) => item.id === node.id)?.metadata?.videoTask));
+                const videoFailure = hasVideoTask ? classifyCanvasVideoTaskFailure(error) : undefined;
+                if (videoFailure === "query_pending") {
+                    message.info("视频仍在后台生成，系统会继续查询原任务");
+                    deferVideoTask(node.id);
+                    return;
+                }
+                message.error(errorDetails);
                 setNodes((prev) =>
-                    prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails, imageTask: undefined, textTask: undefined, videoTask: undefined, audioTask: undefined } } : item)),
+                    prev.map((item) =>
+                        item.id === node.id
+                            ? {
+                                  ...item,
+                                  metadata: {
+                                      ...item.metadata,
+                                      status: NODE_STATUS_ERROR,
+                                      errorDetails,
+                                      imageTask: undefined,
+                                      textTask: undefined,
+                                      ...(videoFailure === "upstream_failed" || !hasVideoTask ? { videoTask: undefined } : {}),
+                                      audioTask: undefined,
+                                  },
+                              }
+                            : item,
+                    ),
                 );
             } finally {
                 finishGenerationRequest(node.id, controller);

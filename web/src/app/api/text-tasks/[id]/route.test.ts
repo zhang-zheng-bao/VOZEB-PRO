@@ -13,6 +13,7 @@ vi.mock("@/lib/server/generation-task-store", () => ({ getStoredGenerationTaskRe
 vi.mock("@/lib/server/internal-origin", () => ({ resolveInternalOrigin: vi.fn(() => "http://localhost") }));
 vi.mock("@/lib/server/points-response", () => ({ pointsResponseHeaders: vi.fn(() => new Headers()) }));
 vi.mock("@/lib/server/generation-channel", () => ({ generationModelId: vi.fn(() => "text-model") }));
+vi.mock("@/lib/server/personal-mode", () => ({ isPersonalMode: vi.fn(() => true) }));
 
 import { after } from "next/server";
 import { GET } from "./route";
@@ -41,13 +42,13 @@ describe("GET /api/text-tasks/[id]", () => {
         expect(after).not.toHaveBeenCalled();
     });
 
-    it("returns the manual review reason without waking the task", async () => {
+    it("hides manual review in personal mode and returns a retryable error", async () => {
         mocks.getTextTask.mockResolvedValue({ id: "text-one", userId: "user", status: "running", reviewReason: "文本提交结果无法确认", config: { model: "text-model" } });
         mocks.getSchedule.mockResolvedValue({ executionPhase: "needs_review" });
 
         const response = await GET(new Request("http://localhost/api/text-tasks/text-one"), { params: Promise.resolve({ id: "text-one" }) });
 
         expect(after).not.toHaveBeenCalled();
-        expect((await response.json()).task).toMatchObject({ needsReview: true, reviewReason: "文本提交结果无法确认" });
+        expect((await response.json()).task).toMatchObject({ status: "error", error: "文本提交结果无法确认", needsReview: false });
     });
 });

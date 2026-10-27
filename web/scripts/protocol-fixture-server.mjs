@@ -36,6 +36,7 @@ const GLOBAL_AIOPC_VIDEO_PATHS = new Set([
 
 export function createProtocolFixtureServer(options = {}) {
     const tasks = new Map();
+    const comfyInputFiles = new Set();
     const requests = [];
     let taskSequence = 0;
     const nextTaskId = (kind) => `fixture-${kind}-${++taskSequence}`;
@@ -44,7 +45,7 @@ export function createProtocolFixtureServer(options = {}) {
             const url = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
             const body = await readRequestBody(request);
             requests.push({ method: request.method || "GET", path: url.pathname, headers: request.headers, contentType: request.headers["content-type"] || "", body });
-            await handleFixtureRequest({ request, response, url, body, tasks, requests, nextTaskId, options });
+            await handleFixtureRequest({ request, response, url, body, tasks, comfyInputFiles, requests, nextTaskId, options });
         } catch (error) {
             sendJson(response, 500, { error: { message: error instanceof Error ? error.message : "fixture failed" } });
         }
@@ -52,7 +53,7 @@ export function createProtocolFixtureServer(options = {}) {
     return { server, requests, tasks };
 }
 
-async function handleFixtureRequest({ request, response, url, body, tasks, requests, nextTaskId, options }) {
+async function handleFixtureRequest({ request, response, url, body, tasks, comfyInputFiles, requests, nextTaskId, options }) {
     const path = fixturePath(url.pathname);
     const responseDelayMs = Math.max(0, Number(options.responseDelayMs) || 0);
     if (request.method === "POST" && responseDelayMs) await delay(responseDelayMs);
@@ -77,7 +78,7 @@ async function handleFixtureRequest({ request, response, url, body, tasks, reque
         tasks.clear();
         return sendJson(response, 200, { ok: true });
     }
-    if (request.method === "GET" && ["/models", "/api/v3/models"].includes(path)) {
+    if (request.method === "GET" && ["/models", "/api/v3/models", "/openapi/v2/models"].includes(path)) {
         const catalog = url.searchParams.has("protocol") ? [...models, { id: "opaque-catalog-model" }] : models;
         return sendJson(response, 200, { object: "list", data: catalog });
     }
@@ -153,8 +154,36 @@ async function handleFixtureRequest({ request, response, url, body, tasks, reque
     if (request.method === "POST" && path === "/custom/images") {
         return sendJson(response, 200, { data: { image_url: `${url.origin}/media/fixture.png` } });
     }
+    if (request.method === "POST" && ["/openapi/v2/rhart-image-g-2/text-to-image", "/openapi/v2/rhart-image-g-2/image-to-image"].includes(path)) {
+        const id = nextTaskId("runninghub-image");
+        tasks.set(id, { kind: "runninghub-image", status: "completed" });
+        return sendJson(response, 200, { data: { taskId: id, status: "SUCCESS", outputs: [{ url: `${url.origin}/media/fixture.png` }] } });
+    }
+    if (request.method === "GET" && path === "/system_stats") return sendJson(response, 200, { system: { os: "fixture" } });
+    if (request.method === "HEAD" && path === "/view" && url.searchParams.get("type") === "input") {
+        return sendJson(response, comfyInputFiles.has(url.searchParams.get("filename")) ? 200 : 404, {});
+    }
+    if (request.method === "POST" && path === "/upload/image") {
+        const form = await new Request(url, { method: "POST", headers: { "content-type": request.headers["content-type"] }, body }).formData();
+        const file = form.get("image");
+        if (!file || typeof file === "string") return sendJson(response, 400, { error: "missing image" });
+        comfyInputFiles.add(file.name);
+        return sendJson(response, 200, { name: file.name, subfolder: "", type: "input" });
+    }
+    if (request.method === "POST" && path === "/prompt") {
+        const id = nextTaskId("comfyui");
+        tasks.set(id, { kind: "comfyui", status: "completed" });
+        return sendJson(response, 200, { prompt_id: id });
+    }
+    if (request.method === "POST" && path === "/openapi/v2/query") {
+        const payload = jsonBody(body);
+        const id = String(payload.taskId || payload.task_id || "");
+        const task = tasks.get(id);
+        const outputUrl = task?.kind === "runninghub-image" ? `${url.origin}/media/fixture.png` : `${url.origin}/media/fixture.mp4`;
+        return sendJson(response, 200, { data: { taskId: id, status: "SUCCESS", outputs: [{ url: outputUrl }] } });
+    }
 
-    if (request.method === "POST" && (GLOBAL_AIOPC_VIDEO_PATHS.has(path) || ["/videos", "/contents/generations/tasks", "/seedance-special/videos"].includes(path))) {
+    if (request.method === "POST" && (GLOBAL_AIOPC_VIDEO_PATHS.has(path) || ["/videos", "/contents/generations/tasks", "/seedance-special/videos", "/openapi/v2/rhart-video/sparkvideo-2.0-fast/text-to-video", "/openapi/v2/rhart-video/sparkvideo-2.0-fast/image-to-video", "/openapi/v2/rhart-video/sparkvideo-2.0-fast/multimodal-video"].includes(path))) {
         const model = requestedModel(body, request.headers["content-type"] || "");
         if (shouldFailRequest(request, model)) return sendJson(response, model.includes("-fail") ? 400 : 503, { error: { message: "fixture video failure" } });
         const id = nextTaskId("video");
@@ -191,6 +220,17 @@ async function handleFixtureRequest({ request, response, url, body, tasks, reque
         const resultUrl = task.kind === "yumeng-image" ? `${url.origin}/media/fixture.png` : `${url.origin}/media/fixture.mp4`;
         return sendJson(response, 200, { task_id: id, status: "completed", result_url: resultUrl });
     }
+    const comfyHistoryId = path.match(/^\/history\/([^/]+)$/)?.[1];
+    if (request.method === "GET" && comfyHistoryId) {
+        const id = decodeURIComponent(comfyHistoryId);
+        if (!tasks.has(id)) return sendJson(response, 200, {});
+        return sendJson(response, 200, {
+            [id]: {
+                status: { completed: true, messages: [] },
+                outputs: { "214": { videos: [{ filename: "fixture.mp4", subfolder: "", type: "output" }] } },
+            },
+        });
+    }
     if (request.method === "POST" && path === "/custom/videos") {
         const id = nextTaskId("custom-video");
         tasks.set(id, { kind: "custom-video", status: "completed" });
@@ -209,12 +249,20 @@ async function handleFixtureRequest({ request, response, url, body, tasks, reque
     if (request.method === "GET" && videoId) {
         const mediaUrl = `${url.origin}/media/fixture.mp4`;
         const task = tasks.get(videoId);
-        if (task?.kind === "image") return sendJson(response, 200, { task_id: videoId, status: "completed", image_url: `${url.origin}/media/fixture.png` });
+        if (path.startsWith("/openapi/v2/query/")) {
+            const outputUrl = task?.kind === "runninghub-image" ? `${url.origin}/media/fixture.png` : mediaUrl;
+            return sendJson(response, 200, { data: { taskId: videoId, status: "SUCCESS", outputs: [{ url: outputUrl }] } });
+        }
+        if (task?.kind === "image" || task?.kind === "runninghub-image") return sendJson(response, 200, { task_id: videoId, status: "completed", image_url: `${url.origin}/media/fixture.png` });
         if (task?.status === "pending") return sendJson(response, 200, { id: videoId, task_id: videoId, status: "processing" });
         if (task?.status === "cancelled") return sendJson(response, 200, { id: videoId, task_id: videoId, status: "cancelled" });
         return sendJson(response, 200, { id: videoId, task_id: videoId, status: "completed", video_url: mediaUrl, content: { video_url: mediaUrl }, result: { video_url: mediaUrl } });
     }
     if (request.method === "GET" && path === "/media/fixture.mp4") {
+        const bytes = options.videoPath ? await readFile(options.videoPath) : FALLBACK_MP4;
+        return sendBytes(response, 200, "video/mp4", bytes);
+    }
+    if (request.method === "GET" && path === "/view" && url.searchParams.get("filename") === "fixture.mp4") {
         const bytes = options.videoPath ? await readFile(options.videoPath) : FALLBACK_MP4;
         return sendBytes(response, 200, "video/mp4", bytes);
     }
@@ -333,7 +381,7 @@ function firstShotId(payload) {
 }
 
 function videoTaskId(path) {
-    const patterns = [/^\/videos\/([^/]+)$/, /^\/contents\/generations\/tasks\/([^/]+)$/, /^\/result\/([^/]+)$/];
+    const patterns = [/^\/videos\/([^/]+)$/, /^\/contents\/generations\/tasks\/([^/]+)$/, /^\/result\/([^/]+)$/, /^\/openapi\/v2\/query\/([^/]+)$/];
     for (const pattern of patterns) {
         const match = path.match(pattern);
         if (match) return decodeURIComponent(match[1]);

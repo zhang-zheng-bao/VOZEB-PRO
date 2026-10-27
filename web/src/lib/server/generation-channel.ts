@@ -7,6 +7,8 @@ export type SystemGenerationChannelConfig = {
     apiSource: "system";
     baseUrl: string;
     apiKey: "system";
+    providerBaseUrl?: string;
+    providerApiKey?: string;
     apiFormat: GenerationApiFormat;
     model: string;
     channelId?: string;
@@ -49,6 +51,8 @@ export function toSystemGenerationChannel(resolved: ResolvedLogicalModel): Syste
         apiSource: "system",
         baseUrl: `/api/ai/system/${encodeURIComponent(resolved.channelId)}`,
         apiKey: "system",
+        providerBaseUrl: resolved.channel.baseUrl,
+        providerApiKey: resolved.channel.apiKey,
         apiFormat: modelConfig?.apiFormat || resolved.channel.apiFormat,
         model: resolved.upstreamModel,
         channelId: resolved.channelId,

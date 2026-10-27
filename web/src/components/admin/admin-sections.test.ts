@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { adminSectionHref, allowedAdminSections, canAccessAdminSection, parseAdminSection, resolveAdminSection } from "./admin-sections";
+import { adminSectionHref, allowedAdminSections, canAccessAdminSection, parseAdminSection, resolveAdminSection, resolveSettingsSection } from "./admin-sections";
 
 describe("admin sections", () => {
     it("parses a valid section and falls back to overview", () => {
@@ -10,8 +10,16 @@ describe("admin sections", () => {
     });
 
     it("keeps unrelated query parameters while updating the current section", () => {
-        expect(adminSectionHref("channels", "https://example.com/admin?from=notice#top")).toBe("/admin?from=notice&section=channels#top");
-        expect(adminSectionHref("overview", "https://example.com/admin?section=channels&from=notice#top")).toBe("/admin?from=notice#top");
+        expect(adminSectionHref("channels", "https://example.com/settings?from=notice#top")).toBe("/settings?from=notice&section=channels#top");
+        expect(adminSectionHref("overview", "https://example.com/settings?section=channels&from=notice#top")).toBe("/settings?from=notice#top");
+    });
+
+    it("keeps commercial sections out of the local settings surface", () => {
+        expect(resolveSettingsSection("agentPrompts")).toBe("agentPrompts");
+        expect(resolveSettingsSection("prompts")).toBe("prompts");
+        expect(resolveSettingsSection("dramaStyles")).toBe("dramaStyles");
+        expect(resolveSettingsSection("payments")).toBe("channels");
+        expect(resolveSettingsSection(undefined)).toBe("channels");
     });
 
     it("shows only sections allowed by the administrator duties", () => {

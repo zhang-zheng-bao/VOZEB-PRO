@@ -162,6 +162,7 @@ export async function updatePrompt(id: string, input: PromptInput, options: { sc
                 toPromptRecord({
                     ...item,
                     ...normalized,
+                    source: undefined,
                     updatedAt: new Date().toISOString(),
                 }),
             ),
@@ -178,6 +179,7 @@ export async function updatePrompt(id: string, input: PromptInput, options: { sc
         item.tags = next.tags;
         item.category = next.category;
         item.preview = next.preview;
+        item.source = undefined;
         item.updatedAt = new Date().toISOString();
         return item;
     });

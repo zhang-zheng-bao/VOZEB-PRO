@@ -4,12 +4,14 @@ import { AuthForm } from "@/components/auth/auth-form";
 import { getAuthSettings } from "@/lib/auth/store";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getInstallStatus } from "@/lib/server/install-status";
+import { isPersonalMode } from "@/lib/server/personal-mode";
 
 type RegisterPageProps = {
     searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 export default async function RegisterPage({ searchParams }: RegisterPageProps) {
+    if (isPersonalMode()) redirect("/create");
     const params = searchParams ? await searchParams : {};
     const nextPath = safeNextPath(firstValue(params.next));
     const referralCode = firstValue(params.ref)?.trim().toUpperCase() || "";

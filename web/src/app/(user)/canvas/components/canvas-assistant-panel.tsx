@@ -15,6 +15,7 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { CREATIVE_RUN_MODEL_LIMIT, type CreativeGenerationPreferences } from "@/lib/creative-runtime-contract";
 import { CreativeAgentControls, CreativeAgentSkillCard, type CreativeAgentModelOption } from "@/components/agent/creative-agent-controls";
+import { ComfyUiServerControl } from "@/components/layout/comfyui-server-control";
 import { useCreativeAgentOptions } from "@/hooks/use-creative-agent-options";
 import { watchCanvasAgentRun } from "./canvas-agent-run-client";
 import { withCanvasAgentRunWatch } from "./canvas-agent-run-watch-guard";
@@ -767,6 +768,7 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, snapshot, session
                         </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
+                        {user?.id === "local-personal-user" ? <ComfyUiServerControl buttonClassName="canvas-agent-server-control grid size-8 place-items-center rounded-full" buttonStyle={iconButtonStyle} /> : null}
                         <Tooltip title="收起对话">
                             <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={iconButtonStyle} icon={<PanelRightClose className="size-4" />} onClick={collapse} aria-label="收起 Agent 面板" />
                         </Tooltip>

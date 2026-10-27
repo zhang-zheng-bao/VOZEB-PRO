@@ -98,6 +98,30 @@ describe("drama project service updates", () => {
         expect(mocks.updateDramaProject).toHaveBeenCalledWith("user-one", expect.objectContaining({ id: current.id, title: "新标题", updatedAt: "2026-07-19T08:00:02.000Z" }), current.updatedAt);
     });
 
+    it("persists per-category asset image models", async () => {
+        const current = project("2026-07-19T08:00:01.000Z", "旧标题");
+        mocks.getDramaProject.mockResolvedValue(current);
+
+        const saved = await updateDramaProjectForUser("user-one", current.id, {
+            ...project("2026-07-19T08:00:02.000Z", "新标题"),
+            assetImageModels: { character: "gpt-image-2.5", scene: "gpt-image-2", prop: "" },
+        });
+
+        expect(saved.assetImageModels).toEqual({ character: "gpt-image-2.5", scene: "gpt-image-2" });
+    });
+
+    it("persists the storyboard image model", async () => {
+        const current = project("2026-07-19T08:00:01.000Z", "旧标题");
+        mocks.getDramaProject.mockResolvedValue(current);
+
+        const saved = await updateDramaProjectForUser("user-one", current.id, {
+            ...project("2026-07-19T08:00:02.000Z", "新标题"),
+            storyboardImageModel: "gpt-image-2.5",
+        });
+
+        expect(saved.storyboardImageModel).toBe("gpt-image-2.5");
+    });
+
     it("preserves exact project dimensions and reference metadata", async () => {
         const current = project("2026-07-19T08:00:01.000Z", "旧标题");
         mocks.getDramaProject.mockResolvedValue(current);

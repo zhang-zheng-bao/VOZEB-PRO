@@ -16,6 +16,7 @@ export function AppSidebar({ activeToolSlug, expanded }: { activeToolSlug?: Navi
     const site = usePublicSessionStore((state) => state.payload?.settings?.site) || { title: DEFAULT_SITE_TITLE, logoUrl: "/logo.svg" };
     const siteTitle = resolveSiteTitle(site.title);
     const helpActive = pathname.startsWith("/help");
+    const personalMode = process.env.NEXT_PUBLIC_VOZEB_PRO_PERSONAL_MODE === "true";
 
     return (
         <aside className={cn("hidden h-full shrink-0 flex-col border-r border-[#eaecf0] bg-white text-[#111827] transition-[width] duration-200 lg:flex dark:border-[#292d33] dark:bg-[#111316] dark:text-[#f3f5f7]", expanded ? "w-44" : "w-[72px]")}>
@@ -26,7 +27,8 @@ export function AppSidebar({ activeToolSlug, expanded }: { activeToolSlug?: Navi
 
             <nav className={cn("hide-scrollbar min-h-0 flex-1 overflow-y-auto py-5", expanded ? "px-3" : "px-2")} aria-label="工作空间导航">
                 {navigationGroups.map((group, groupIndex) => {
-                    const tools = navigationTools.filter((tool) => tool.group === group.id);
+                    const tools = navigationTools.filter((tool) => tool.group === group.id && (!personalMode || !["community", "me"].includes(tool.slug)));
+                    if (!tools.length) return null;
                     return (
                         <div key={group.id} className={cn(groupIndex > 0 && "mt-[22px]")}>
                             {expanded ? <div className="mb-1.5 px-2 text-xs font-normal text-[#98a2b3] dark:text-[#737d89]">{group.label}</div> : null}

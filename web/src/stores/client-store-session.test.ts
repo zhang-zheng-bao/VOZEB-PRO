@@ -420,6 +420,23 @@ describe("client store session isolation", () => {
         expect(updated.episodes[0].shots[0]).toMatchObject({ characterIds: ["character-hero", newCharacter?.id], sceneId: newScene?.id });
     });
 
+    it("resets project assets when replacing the complete Drama script", () => {
+        useUserStore.getState().setUser(user("user-a"));
+        const project = dramaProject("drama-a", "旧剧本");
+        project.characters = [{ id: "character-old", name: "旧角色", description: "旧剧本角色" }];
+        project.scenes = [{ id: "scene-old", name: "旧场景", description: "旧剧本场景" }];
+        project.props = [{ id: "prop-old", name: "旧道具", description: "旧剧本道具" }];
+        project.clues = [{ id: "clue-old", name: "旧线索", description: "旧剧本线索", payoff: "旧伏笔" }];
+        useDramaStore.setState({ projects: [project], hydrated: true, hydratedUserId: "user-a" });
+
+        useDramaStore.getState().importEpisodes("drama-a", [{ title: "第 1 集 · 新剧本", script: "新剧本正文", sourceRange: "第1集 新剧本" }]);
+
+        const updated = useDramaStore.getState().projects[0];
+        expect(updated).toMatchObject({ characters: [], scenes: [], props: [], clues: [] });
+        expect(updated.episodes).toHaveLength(1);
+        expect(updated.episodes[0]).toMatchObject({ title: "第 1 集 · 新剧本", script: "新剧本正文", reviewStatus: "draft", shots: [] });
+    });
+
     it("does not reset queued or running Drama shot tasks", () => {
         useUserStore.getState().setUser(user("user-a"));
         const project = dramaProject("drama-a", "用户 A 短剧");

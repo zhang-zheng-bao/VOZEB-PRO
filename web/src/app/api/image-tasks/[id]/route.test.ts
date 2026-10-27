@@ -19,6 +19,7 @@ vi.mock("@/lib/server/generation-task-store", () => ({ getStoredGenerationTaskRe
 vi.mock("@/lib/server/internal-origin", () => ({ resolveInternalOrigin: vi.fn(() => "http://localhost") }));
 vi.mock("@/lib/server/points-response", () => ({ pointsResponseHeaders: vi.fn(() => new Headers()) }));
 vi.mock("@/lib/server/generation-channel", () => ({ generationModelId: vi.fn(() => "image-model") }));
+vi.mock("@/lib/server/personal-mode", () => ({ isPersonalMode: vi.fn(() => true) }));
 
 import { after } from "next/server";
 import { GET } from "./route";
@@ -54,14 +55,14 @@ describe("GET /api/image-tasks/[id]", () => {
         expect(after).not.toHaveBeenCalled();
     });
 
-    it("leaves an uncertain submission for manual review", async () => {
+    it("hides manual review in personal mode and returns a retryable error", async () => {
         mocks.getImageTask.mockResolvedValue(imageTask({ reviewReason: "图片提交结果无法确认" }));
         mocks.getSchedule.mockResolvedValue({ executionPhase: "needs_review" });
 
         const response = await GET(new Request("http://localhost/api/image-tasks/image-one"), context);
 
         expect(after).not.toHaveBeenCalled();
-        expect((await response.json()).task).toMatchObject({ needsReview: true, reviewReason: "图片提交结果无法确认" });
+        expect((await response.json()).task).toMatchObject({ status: "error", error: "图片提交结果无法确认", canRetry: true, needsReview: false });
     });
 });
 

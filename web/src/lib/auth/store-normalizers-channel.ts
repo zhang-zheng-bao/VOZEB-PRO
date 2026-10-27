@@ -3,7 +3,7 @@ import { isGlobalAiOpcPreset } from "@/lib/globalaiopc-catalog";
 
 import type { LogicalModelCapability, SystemChannelAdvancedConfig, SystemChannelProtocol } from "./store-types";
 
-const CHANNEL_PROTOCOLS: SystemChannelProtocol[] = ["auto", "openai", "yumeng", "gemini", "sub2api", "newapi", "vozeb-recommended", "globalaiopc", "seedance", "stable-diffusion", "volcengine-video", "seedance-special", "custom", "compatible"];
+const CHANNEL_PROTOCOLS: SystemChannelProtocol[] = ["auto", "openai", "yumeng", "gemini", "runninghub", "sub2api", "newapi", "vozeb-recommended", "globalaiopc", "seedance", "stable-diffusion", "volcengine-video", "seedance-special", "comfyui", "custom", "compatible"];
 
 export function normalizeSystemChannelAdvancedConfig(config: Partial<SystemChannelAdvancedConfig> | undefined): SystemChannelAdvancedConfig | undefined {
     if (!config || typeof config !== "object") return undefined;
@@ -34,7 +34,7 @@ export function normalizeSystemChannelAdvancedConfig(config: Partial<SystemChann
         queryPath: normalizeApiPath(config.queryPath),
         ...(normalizeApiPath(config.cancelPath) ? { cancelPath: normalizeApiPath(config.cancelPath) } : {}),
         ...(config.cancelMethod === "POST" || config.cancelMethod === "DELETE" ? { cancelMethod: config.cancelMethod } : {}),
-        requestTemplate: textOrEmpty(config.requestTemplate, 12_000),
+        requestTemplate: textOrEmpty(config.requestTemplate, protocol === "comfyui" ? 1_000_000 : 12_000),
         resultField: textOrEmpty(config.resultField, 500),
         statusField: textOrEmpty(config.statusField, 500),
         durationRange: textOrEmpty(config.durationRange, 120),
@@ -42,6 +42,7 @@ export function normalizeSystemChannelAdvancedConfig(config: Partial<SystemChann
         supportsReferenceImage: Boolean(config.supportsReferenceImage),
         supportsReferenceVideo: Boolean(config.supportsReferenceVideo),
         supportsReferenceAudio: Boolean(config.supportsReferenceAudio),
+        ...(protocol === "comfyui" && comfyUiWorkflow(config.comfyuiWorkflow) ? { comfyuiWorkflow: comfyUiWorkflow(config.comfyuiWorkflow) } : {}),
         ...(modelCatalogPaths.length ? { modelCatalogPaths } : {}),
         ...(Object.keys(modelCapabilities).length ? { modelCapabilities } : {}),
         ...(Object.keys(modelConfigs).length ? { modelConfigs } : {}),
@@ -57,6 +58,16 @@ export function normalizeApiPath(value: unknown) {
 
 export function textOrEmpty(value: unknown, maxLength: number) {
     return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
+function comfyUiWorkflow(value: unknown) {
+    if (typeof value === "string") return textOrEmpty(value, 1_000_000);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+    try {
+        return JSON.stringify(value).slice(0, 1_000_000);
+    } catch {
+        return "";
+    }
 }
 
 function normalizeChannelModelCapabilities(value: unknown) {

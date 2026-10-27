@@ -78,6 +78,63 @@ const seedanceOperation: ProtocolOperation = {
     supportsReferenceAudio: true,
 };
 
+const runningHubTextOperation: ProtocolOperation = {
+    capability: "text",
+    createPath: "/chat/completions",
+    requestTemplate: '{"model":"{{model}}","messages":[{"role":"user","content":"{{prompt}}"}]}',
+    resultField: "choices[0].message.content",
+};
+
+const runningHubTextToImageOperation: ProtocolOperation = {
+    capability: "image",
+    createPath: "/openapi/v2/rhart-image-g-2/text-to-image",
+    queryPath: "/openapi/v2/query/:task_id",
+    requestTemplate: '{"prompt":"{{prompt}}","aspectRatio":"{{aspect_ratio}}","size":"{{size}}","quality":"{{quality}}"}',
+    resultField: "data.outputs[0].url / data.outputs[0].fileUrl / data.results[0].url / results[0].url / outputs[0].url / data.url / url",
+    statusField: "data.status / status / data.taskStatus / taskStatus",
+    referenceRule: "RunningHub OpenAPI；参考图需要 RH 可读取的 URL，后续按单个模型精修。",
+    supportsReferenceImage: false,
+};
+
+const runningHubImageEditOperation: ProtocolOperation = {
+    ...runningHubTextToImageOperation,
+    editPath: "/openapi/v2/rhart-image-g-2/image-to-image",
+    requestTemplate: '{"prompt":"{{prompt}}","imageUrl":"{{image}}","imageUrls":"{{images}}","aspectRatio":"{{aspect_ratio}}","size":"{{size}}","quality":"{{quality}}"}',
+    supportsReferenceImage: true,
+};
+
+const runningHubTextToVideoOperation: ProtocolOperation = {
+    capability: "video",
+    createPath: "/openapi/v2/rhart-video/sparkvideo-2.0-fast/text-to-video",
+    queryPath: "/openapi/v2/query/:task_id",
+    requestTemplate: '{"prompt":"{{prompt}}","duration":"{{duration}}","aspectRatio":"{{aspect_ratio}}","resolution":"{{resolution}}","generateAudio":"{{generate_audio}}"}',
+    resultField: "data.outputs[0].url / data.outputs[0].fileUrl / data.results[0].url / results[0].url / outputs[0].url / data.url / url",
+    statusField: "data.status / status / data.taskStatus / taskStatus",
+    durationRange: "5、10 秒",
+    referenceRule: "RunningHub OpenAPI；文生视频不需要参考素材，参考图/视频/音频必须先上传到 RH 或使用公网 URL。",
+    supportsReferenceImage: false,
+    supportsReferenceVideo: false,
+    supportsReferenceAudio: false,
+};
+
+const runningHubImageToVideoOperation: ProtocolOperation = {
+    ...runningHubTextToVideoOperation,
+    createPath: "/openapi/v2/rhart-video/sparkvideo-2.0-fast/image-to-video",
+    requestTemplate: '{"prompt":"{{prompt}}","duration":"{{duration}}","aspectRatio":"{{aspect_ratio}}","resolution":"{{resolution}}","generateAudio":"{{generate_audio}}","imageUrl":"{{image}}","imageUrls":"{{images}}"}',
+    referenceRule: "RunningHub OpenAPI 图生视频；参考图需要 RH 可读取的 URL，后续会加入本地素材自动上传。",
+    supportsReferenceImage: true,
+};
+
+const runningHubMultimodalVideoOperation: ProtocolOperation = {
+    ...runningHubTextToVideoOperation,
+    createPath: "/openapi/v2/rhart-video/sparkvideo-2.0-fast/multimodal-video",
+    requestTemplate: '{"prompt":"{{prompt}}","duration":"{{duration}}","aspectRatio":"{{aspect_ratio}}","resolution":"{{resolution}}","generateAudio":"{{generate_audio}}","imageUrls":"{{images}}","videoUrls":"{{videos}}","audioUrls":"{{audios}}"}',
+    referenceRule: "RunningHub OpenAPI 多模态视频；参考素材需要 RH 可读取的 URL，后续会加入本地素材自动上传。",
+    supportsReferenceImage: true,
+    supportsReferenceVideo: true,
+    supportsReferenceAudio: true,
+};
+
 const seedanceSpecialOperation: ProtocolOperation = {
     capability: "video",
     createPath: "/v1/seedance-special/videos",
@@ -155,6 +212,27 @@ export const registeredChannelProtocolDefinitions: ChannelProtocolDefinition[] =
         capabilities: ["video"],
         operations: { video: geminiVideoOperation },
         strict: true,
+    },
+    {
+        id: "runninghub",
+        label: "RunningHub",
+        description: "RunningHub 聚合接口；文本走 OpenAI 兼容，视频走 RH OpenAPI 异步任务。",
+        apiFormat: "openai",
+        authMode: "bearer",
+        defaultBaseUrl: "https://www.runninghub.ai",
+        modelCatalogPaths: ["/openapi/v2/models"],
+        capabilities: ["text", "image", "video"],
+        operations: { text: runningHubTextOperation, image: runningHubTextToImageOperation, video: runningHubTextToVideoOperation },
+        builtInModels: [
+            { id: "qwen/qwen-plus", label: "Qwen Plus", capability: "text", operation: runningHubTextOperation },
+            { id: "openai/gpt-5.1", label: "GPT-5.1", capability: "text", operation: runningHubTextOperation },
+            { id: "gpt-image-2.0/text-to-image-channel-low-price", label: "GPT Image 2.0 文生图", capability: "image", operation: runningHubTextToImageOperation },
+            { id: "gpt-image-2.0/edit-channel-low-price", label: "GPT Image 2.0 图像编辑", capability: "image", operation: runningHubImageEditOperation },
+            { id: "Seedance2.0 Fast Text to Video", label: "Seedance2.0 Fast 文生视频", capability: "video", operation: runningHubTextToVideoOperation },
+            { id: "Seedance2.0 Fast Image to Video", label: "Seedance2.0 Fast 图生视频", capability: "video", operation: runningHubImageToVideoOperation },
+            { id: "Seedance2.0 Fast Multimodal Video", label: "Seedance2.0 Fast 多模态视频", capability: "video", operation: runningHubMultimodalVideoOperation },
+        ],
+        advanced: true,
     },
     {
         id: "seedance",
@@ -243,6 +321,32 @@ export const registeredChannelProtocolDefinitions: ChannelProtocolDefinition[] =
         capabilities: ["video"],
         operations: { video: seedanceSpecialOperation },
         builtInModels: SEEDANCE_SPECIAL_MODELS.map(([id, label]) => ({ id, label, capability: "video" as const })),
+        strict: true,
+    },
+    {
+        id: "comfyui",
+        label: "ComfyUI",
+        description: "ComfyUI 服务器；通过 API 格式工作流执行视频生成任务。",
+        apiFormat: "openai",
+        authMode: "none",
+        defaultBaseUrl: "http://127.0.0.1:8188",
+        modelCatalogPaths: [],
+        capabilities: ["video"],
+        operations: {
+            video: {
+                capability: "video",
+                createPath: "/prompt",
+                queryPath: "/history/:id",
+                requestTemplate: "",
+                resultField: "outputs.*.videos[0]",
+                durationRange: "1-15",
+                referenceRule: "参考素材使用站内已保存文件，提交前上传到 ComfyUI input 目录；图片、视频和音频分别接入 ref_images/ref_videos/ref_audios。",
+                supportsReferenceImage: true,
+                supportsReferenceVideo: true,
+                supportsReferenceAudio: true,
+            },
+        },
+        builtInModels: [{ id: "minimax-h3-multi-reference", label: "MiniMax H3 多参考", capability: "video" }],
         strict: true,
     },
     {

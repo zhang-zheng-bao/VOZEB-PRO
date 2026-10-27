@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 
 import { unauthorized, workPublicationError, workPublicationOk } from "@/app/api/_shared/work-publication-response";
 import { getCurrentUser } from "@/lib/auth/session";
+import { isPersonalMode } from "@/lib/server/personal-mode";
 import { listUserNotifications } from "@/lib/server/work-community-service";
 
 export const runtime = "nodejs";
@@ -10,6 +11,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
     const user = await getCurrentUser();
     if (!user) return unauthorized();
+    if (isPersonalMode()) return workPublicationOk({ items: [], nextCursor: null });
     try {
         return workPublicationOk(
             await listUserNotifications(user.id, {

@@ -51,7 +51,7 @@ export function reviewDramaEpisode(project: DramaProject, episode: DramaEpisode)
     return request<{ review: DramaVisualReview }>("/api/drama/review", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: { title: project.title, summary: project.summary, style: project.style, ratio: project.ratio }, episode }),
+        body: JSON.stringify({ project: { title: project.title, summary: project.summary, style: project.visualStylePrompt || project.style, ratio: project.ratio }, episode }),
     }).then((data) => data.review);
 }
 

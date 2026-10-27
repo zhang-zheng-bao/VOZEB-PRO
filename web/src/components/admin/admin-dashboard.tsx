@@ -43,9 +43,11 @@ const loadPaymentsSection = () => import("./admin-billing-sections").then((modul
 const loadCdkSection = () => import("./admin-cdk-section").then((module) => module.AdminCdkSection);
 const loadReferralsSection = () => import("./admin-marketing-sections").then((module) => module.AdminReferralsSection);
 const loadChannelsSection = () => import("./admin-upstream-sections").then((module) => module.AdminChannelsSection);
+const loadAgentPromptsSection = () => import("./admin-upstream-sections").then((module) => module.AdminAgentPromptsSection);
 const loadSkillsSection = () => import("./admin-upstream-sections").then((module) => module.AdminSkillsSection);
 const loadAnnouncementsSection = () => import("./admin-content-sections").then((module) => module.AdminAnnouncementsSection);
 const loadPromptsSection = () => import("./admin-content-sections").then((module) => module.AdminPromptsSection);
+const loadDramaStylesSection = () => import("./admin-drama-style-section").then((module) => module.AdminDramaStyleSection);
 const loadWorksSection = () => import("@/app/admin/works/components/admin-works-section").then((module) => module.AdminWorksSection);
 const loadHelpSection = () => import("./admin-help-section").then((module) => module.AdminHelpSection);
 const loadUsersSection = () => import("./admin-users-section").then((module) => module.AdminUsersSection);
@@ -70,9 +72,11 @@ const sectionLoaders: Partial<Record<AdminSectionKey, () => Promise<unknown>>> =
     coupons: loadCouponsSection,
     referrals: loadReferralsSection,
     channels: loadChannelsSection,
+    agentPrompts: loadAgentPromptsSection,
     skills: loadSkillsSection,
     announcements: loadAnnouncementsSection,
     prompts: loadPromptsSection,
+    dramaStyles: loadDramaStylesSection,
     works: loadWorksSection,
     adminHelp: loadHelpSection,
     users: loadUsersSection,
@@ -97,9 +101,11 @@ const AdminReferralsSection = dynamic(loadReferralsSection, { loading: AdminSect
 const AdminPaymentsSection = dynamic(loadPaymentsSection, { loading: AdminSectionLoading });
 const AdminCdkSection = dynamic(loadCdkSection, { loading: AdminSectionLoading });
 const AdminChannelsSection = dynamic(loadChannelsSection, { loading: AdminSectionLoading });
+const AdminAgentPromptsSection = dynamic(loadAgentPromptsSection, { loading: AdminSectionLoading });
 const AdminSkillsSection = dynamic(loadSkillsSection, { loading: AdminSectionLoading });
 const AdminAnnouncementsSection = dynamic(loadAnnouncementsSection, { loading: AdminSectionLoading });
 const AdminPromptsSection = dynamic(loadPromptsSection, { loading: AdminSectionLoading });
+const AdminDramaStyleSection = dynamic(loadDramaStylesSection, { loading: AdminSectionLoading });
 const AdminWorksSection = dynamic(loadWorksSection, { loading: AdminSectionLoading });
 const AdminHelpSection = dynamic(loadHelpSection, { loading: AdminSectionLoading });
 const AdminUsersSection = dynamic(loadUsersSection, { loading: AdminSectionLoading });
@@ -133,6 +139,7 @@ export function AdminDashboard(props: AdminDashboardProps) {
         viewingCdkCode,
         setViewingCdkCode,
         promptModalOpen,
+        editingPrompt,
         activeSection,
         setActiveSection,
         mobileNavOpen,
@@ -145,7 +152,7 @@ export function AdminDashboard(props: AdminDashboardProps) {
         operationsSummary,
         loadBillingSummary,
         loadOperationsSummary,
-        createPrompt,
+        savePrompt,
         copyCdkPlainCode,
         closePromptModal,
         uploadSiteLogo,
@@ -155,7 +162,7 @@ export function AdminDashboard(props: AdminDashboardProps) {
     } = controller;
     return (
         <div data-hydrated={hydrated ? "true" : "false"} className={`admin-mobile-safe admin-dashboard-shell min-h-dvh w-full min-w-0 ${desktopNavCollapsed ? "is-sidebar-collapsed" : ""}`}>
-            {mobileNavOpen ? <button type="button" className="admin-section-nav-backdrop lg:hidden" aria-label="收起后台侧边栏" onClick={() => setMobileNavOpen(false)} /> : null}
+            {mobileNavOpen ? <button type="button" className="admin-section-nav-backdrop lg:hidden" aria-label="收起设置侧边栏" onClick={() => setMobileNavOpen(false)} /> : null}
             <AdminSectionNav
                 activeKey={activeSection}
                 currentUser={currentUser}
@@ -174,13 +181,13 @@ export function AdminDashboard(props: AdminDashboardProps) {
                             <button
                                 type="button"
                                 className="admin-mobile-menu-trigger flex size-9 shrink-0 items-center justify-center rounded-md border border-zinc-200 bg-white text-zinc-700 transition hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900 lg:hidden"
-                                aria-label="展开后台侧边栏"
+                                aria-label="展开设置侧边栏"
                                 onClick={() => setMobileNavOpen(true)}
                             >
                                 <Menu className="size-4" />
                             </button>
                             <div className="min-w-0 items-center gap-2 text-xs text-zinc-400 lg:flex">
-                                <span>后台</span>
+                                <span>设置</span>
                                 <span>/</span>
                                 <strong className="truncate font-medium text-zinc-700 dark:text-zinc-300">{activeSectionInfo.label}</strong>
                             </div>
@@ -249,11 +256,13 @@ export function AdminDashboard(props: AdminDashboardProps) {
                     {activeSection === "payments" ? <AdminPaymentsSection controller={controller} /> : null}
                     {activeSection === "updates" ? <AdminUpdatesSection controller={controller} /> : null}
                     {activeSection === "channels" ? <AdminChannelsSection controller={controller} /> : null}
+                    {activeSection === "agentPrompts" ? <AdminAgentPromptsSection controller={controller} /> : null}
                     {activeSection === "skills" ? <AdminSkillsSection controller={controller} /> : null}
                     {activeSection === "cdk" ? <AdminCdkSection controller={controller} /> : null}
                     {activeSection === "announcements" ? <AdminAnnouncementsSection controller={controller} /> : null}
                     {activeSection === "works" ? <AdminWorksSection /> : null}
                     {activeSection === "prompts" ? <AdminPromptsSection controller={controller} /> : null}
+                    {activeSection === "dramaStyles" ? <AdminDramaStyleSection /> : null}
                     {activeSection === "users" ? <AdminUsersSection controller={controller} /> : null}
                     {activeSection === "logs" ? <AdminLogsSection controller={controller} /> : null}
                     {activeSection === "generationOperations" ? <AdminGenerationOperationsSection controller={controller} /> : null}
@@ -262,9 +271,9 @@ export function AdminDashboard(props: AdminDashboardProps) {
             </div>
 
             <Modal
-                title="添加公共提示词"
+                title={editingPrompt ? "编辑公共提示词" : "添加公共提示词"}
                 open={promptModalOpen}
-                okText="保存提示词"
+                okText={editingPrompt ? "保存修改" : "保存提示词"}
                 cancelText="取消"
                 confirmLoading={promptSaving}
                 mask={{ closable: !promptSaving }}
@@ -273,12 +282,12 @@ export function AdminDashboard(props: AdminDashboardProps) {
                 onOk={() => promptForm.submit()}
                 onCancel={closePromptModal}
             >
-                <Form className="admin-prompt-form" form={promptForm} layout="vertical" requiredMark={false} onFinish={createPrompt}>
+                <Form className="admin-prompt-form" form={promptForm} layout="vertical" requiredMark={false} onFinish={savePrompt}>
                     <div className="max-h-[min(68dvh,680px)] overflow-y-auto pr-1">
                         <div className="admin-prompt-note mb-5 rounded-xl p-4">
                             <div className="flex items-center gap-2 text-sm font-semibold text-stone-950 dark:text-stone-100">
                                 <Plus className="size-4 text-stone-600 dark:text-stone-300" />
-                                新增公共提示词
+                                {editingPrompt ? "编辑公共提示词" : "新增公共提示词"}
                             </div>
                             <p className="mt-1 text-xs leading-5 text-stone-600 dark:text-stone-400">建议填写远程图片封面 URL，用户端会直接显示封面，不走本地素材存储。</p>
                         </div>

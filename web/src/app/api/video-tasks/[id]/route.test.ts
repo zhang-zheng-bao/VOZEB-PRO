@@ -21,6 +21,7 @@ vi.mock("@/lib/server/points-response", () => ({ pointsResponseHeaders: vi.fn(()
 vi.mock("@/lib/server/generation-task-recovery-service", () => ({ runGenerationTaskRecoveryBatch: mocks.recover }));
 vi.mock("@/lib/server/generation-task-store", () => ({ getStoredGenerationTaskRecord: mocks.getSchedule }));
 vi.mock("@/lib/server/video-task-log", () => ({ writeVideoGenerationLog: mocks.writeLog }));
+vi.mock("@/lib/server/personal-mode", () => ({ isPersonalMode: vi.fn(() => true) }));
 vi.mock("@/lib/server/video-task-store", () => ({
     canReconcileVideoTask: (task: { status: string; error?: string }) => task.status === "running" || (task.status === "error" && /视频生成超时|视频任务长时间未更新/.test(task.error || "")),
     getVideoTask: mocks.getVideoTask,
@@ -80,13 +81,13 @@ describe("GET /api/video-tasks/[id]", () => {
         expect((await response.json()).task).toMatchObject({ status: "running" });
     });
 
-    it("returns the persisted manual review reason", async () => {
+    it("hides manual review in personal mode and returns a retryable error", async () => {
         mocks.getVideoTask.mockResolvedValue(videoTask({ reviewReason: "视频提交结果无法确认" }));
         mocks.getSchedule.mockResolvedValue({ executionPhase: "needs_review" });
 
         const response = await GET(new Request("http://localhost/api/video-tasks/local-video"), context);
 
-        expect((await response.json()).task).toMatchObject({ needsReview: true, reviewReason: "视频提交结果无法确认" });
+        expect((await response.json()).task).toMatchObject({ status: "error", error: "视频提交结果无法确认", canRetry: true, needsReview: false });
     });
 
     it("rejects browser attempts to submit a terminal status or result URL", async () => {

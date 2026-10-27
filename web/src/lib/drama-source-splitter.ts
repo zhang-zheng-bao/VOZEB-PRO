@@ -33,6 +33,11 @@ function headingSections(source: string) {
     for (const line of source.split("\n")) {
         const trimmed = line.trim();
         if (HEADING_PATTERN.test(trimmed) && lines.some((item) => item.trim())) {
+            if (!title && !sections.length) {
+                title = trimmed;
+                lines = [trimmed];
+                continue;
+            }
             sections.push({ title, text: lines.join("\n").trim() });
             title = trimmed;
             lines = [trimmed];

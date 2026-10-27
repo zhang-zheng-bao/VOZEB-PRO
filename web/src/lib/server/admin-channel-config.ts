@@ -34,6 +34,7 @@ export function serializeAdminSettingsForUser(settings: AuthSettings, user: { ro
     }
     if (!hasAdminPermission(user, "upstream.manage")) {
         serialized.generationCostControl = { ...DEFAULT_SETTINGS.generationCostControl };
+        serialized.agentPrompts = { ...DEFAULT_SETTINGS.agentPrompts };
         serialized.agentSkills = [];
         serialized.systemChannels = serialized.systemChannels.map(channelSummaryWithoutConfiguration);
     }

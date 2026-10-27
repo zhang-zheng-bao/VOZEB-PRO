@@ -41,6 +41,12 @@ describe("agentPlannerInput", () => {
         expect(prompt).toContain("不得把短剧入口当成脱离项目的通用图片或视频工作台");
     });
 
+    it("uses the complete configured surface prompt and renders its dynamic example", () => {
+        const prompt = agentPlannerSystemPrompt("canvas", '{"intent":"conversation"}', { ...DEFAULT_SETTINGS.agentPrompts, canvas: "你是我的私人画布导演。示例：{{FALLBACK_EXAMPLE}}" });
+
+        expect(prompt).toBe('你是我的私人画布导演。示例：{"intent":"conversation"}');
+    });
+
     it("keeps selected Canvas nodes, one-hop relations and exact size while dropping unrelated nodes", () => {
         const snapshot = {
             projectId: "canvas-one",

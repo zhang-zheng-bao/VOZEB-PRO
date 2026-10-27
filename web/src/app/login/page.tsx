@@ -3,12 +3,14 @@ import { redirect } from "next/navigation";
 import { AuthForm } from "@/components/auth/auth-form";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getInstallStatus } from "@/lib/server/install-status";
+import { isPersonalMode } from "@/lib/server/personal-mode";
 
 type LoginPageProps = {
     searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
+    if (isPersonalMode()) redirect("/create");
     const params = searchParams ? await searchParams : {};
     const nextPath = safeNextPath(firstValue(params.next));
     const authError = authErrorMessage(firstValue(params.error));

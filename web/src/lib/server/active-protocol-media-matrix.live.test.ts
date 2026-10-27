@@ -80,30 +80,34 @@ describe("active media protocols over TCP fixtures", () => {
     });
 
     it.each(ADVANCED_IMAGE_PROTOCOLS)("completes configured $id image creation", async (definition) => {
-        const baseUrl = definition.id === "custom" ? origin : `${origin}/v1`;
+        const baseUrl = literalBaseProtocol(definition.id) ? origin : `${origin}/v1`;
         const task = imageTask(baseUrl, "mock-image", definition.id, imageConfig(definition.id));
         const image = definition.id === "custom" ? await runCustomImageTask(task, origin, origin, "", true) : await runOpenAiImageTask(task, origin, origin, "", true);
         await expectImageResult(image);
-        expectCreateRequest(definition.id === "custom" ? "/custom/images" : "/v1/images/generations", false);
+        const operation = protocolModelConfig(definition.id, "image", "mock-image");
+        expectCreateRequest(definition.id === "custom" ? "/custom/images" : new URL(`${baseUrl}${operation?.createPath || "/images/generations"}`).pathname, false);
     });
 
     it.each(ADVANCED_IMAGE_PROTOCOLS)("completes configured $id image editing with a transmitted reference", async (definition) => {
-        const baseUrl = definition.id === "custom" ? origin : `${origin}/v1`;
+        const baseUrl = literalBaseProtocol(definition.id) ? origin : `${origin}/v1`;
         const task = imageTask(baseUrl, "mock-image", definition.id, imageConfig(definition.id), true);
         const image = definition.id === "custom" ? await runCustomImageTask(task, origin, origin, "", true) : await runOpenAiImageTask(task, origin, origin, "", true);
         await expectImageResult(image);
-        expectCreateRequest(definition.id === "custom" ? "/custom/images" : "/v1/images/edits", true);
+        const operation = protocolModelConfig(definition.id, "image", "mock-image");
+        expectCreateRequest(definition.id === "custom" ? "/custom/images" : new URL(`${baseUrl}${operation?.editPath || operation?.createPath || "/images/edits"}`).pathname, true);
     });
 
     it.each(ADVANCED_VIDEO_PROTOCOLS)("completes configured $id video creation and polling", async (definition) => {
         const config = videoConfig(definition.id, origin, "mock-video");
         const upstream = await createUpstream("user-live", "", "", config, "animate a blue logo", { videoSeconds: 5, size: "16:9", vquality: "720", videoGenerateAudio: false }, [], MULTIPLIERS, `video-${definition.id}`);
         await expectVideoResult(config, upstream);
-        expectVideoRequests(definition.id === "custom" ? "/custom/videos" : "/videos", definition.id === "custom" ? "/custom/results/:task_id" : "/videos/:task_id", "mock-video", upstream.id, false);
+        const operation = protocolModelConfig(definition.id, "video", "mock-video");
+        expectVideoRequests(operation?.createPath || (definition.id === "custom" ? "/custom/videos" : "/videos"), operation?.queryPath || (definition.id === "custom" ? "/custom/results/:task_id" : "/videos/:task_id"), "mock-video", upstream.id, false);
     });
 
     it.each(ADVANCED_VIDEO_PROTOCOLS)("completes configured $id image-to-video with a transmitted reference", async (definition) => {
-        const config = videoConfig(definition.id, origin, "mock-video");
+        const model = definition.id === "runninghub" ? "Seedance2.0 Fast Image to Video" : "mock-video";
+        const config = videoConfig(definition.id, origin, model);
         const upstream = await createUpstream(
             "user-live",
             "",
@@ -116,7 +120,8 @@ describe("active media protocols over TCP fixtures", () => {
             `image-video-${definition.id}`,
         );
         await expectVideoResult(config, upstream);
-        expectVideoRequests(definition.id === "custom" ? "/custom/videos" : "/videos", definition.id === "custom" ? "/custom/results/:task_id" : "/videos/:task_id", "mock-video", upstream.id, true);
+        const operation = protocolModelConfig(definition.id, "video", model);
+        expectVideoRequests(operation?.imageToVideoPath || operation?.createPath || (definition.id === "custom" ? "/custom/videos" : "/videos"), operation?.queryPath || (definition.id === "custom" ? "/custom/results/:task_id" : "/videos/:task_id"), model, upstream.id, true);
     });
 });
 
@@ -168,7 +173,7 @@ function imageConfig(protocol: string) {
 }
 
 function videoConfig(protocol: SystemChannelProtocol, baseUrl: string, model: string): SystemGenerationChannelConfig {
-    const strict = protocolModelConfig(protocol, "video");
+    const strict = protocolModelConfig(protocol, "video", model);
     const advancedConfig =
         (strict ? { ...emptyAdvancedConfig(), ...strict } : undefined) ||
         (protocol === "custom"
@@ -227,9 +232,9 @@ function expectCreateRequest(expectedPath: string, referenceRequired: boolean) {
 async function expectVideoResult(config: SystemGenerationChannelConfig, upstream: VideoTask["upstream"]) {
     expect(upstream?.id).toBeTruthy();
     const result = await queryVideoTaskUpstream({ config, upstream, userId: "user-live" } as unknown as VideoTask, "", "");
-    expect(result).toMatchObject({ state: "result_ready", resultUrl: expect.stringContaining("/media/fixture.mp4") });
+    expect(result).toMatchObject({ state: "result_ready", resultUrl: expect.stringMatching(/\/(?:media\/fixture\.mp4|view\?filename=fixture\.mp4)/) });
     if (result.state !== "result_ready") throw new Error(`video fixture did not return a result: ${result.state}`);
-    const response = await fetch(result.resultUrl);
+    const response = await fetch(resolveFixtureUrl(result.resultUrl, config.baseUrl));
     expect(response.ok).toBe(true);
     expect(response.headers.get("content-type")).toBe("video/mp4");
     expect((await response.arrayBuffer()).byteLength).toBeGreaterThan(0);
@@ -237,20 +242,33 @@ async function expectVideoResult(config: SystemGenerationChannelConfig, upstream
 
 function expectVideoRequests(createPath: string, queryPath: string, model: string, taskId: string, referenceRequired: boolean) {
     const createRequests = fixture.requests.filter((request) => request.method === "POST");
-    expect(createRequests).toHaveLength(1);
-    expect(createRequests[0]?.path).toBe(createPath);
-    expect(requestContainsReference(createRequests[0]), referenceRequired ? "reference image was not transmitted to the video provider" : "text-only video request unexpectedly included a reference").toBe(referenceRequired);
-    const expectedQuery = queryPath.replace(":model", model).replace(":task_id", taskId);
+    const createRequest = createRequests.find((request) => request.path === createPath);
+    expect(createRequest).toBeTruthy();
+    const createBody = requestBodyText(createRequest);
+    expect(
+        requestContainsReference(createRequest) || createRequests.some(requestContainsReference),
+        referenceRequired ? `reference image was not transmitted to the video provider: ${createBody}` : `text-only video request unexpectedly included a reference: ${createBody}`,
+    ).toBe(referenceRequired);
+    const expectedQuery = queryPath.replace(":model", model).replace(":task_id", taskId).replace(":id", taskId.replace(/^prompt:/, ""));
     expect(fixture.requests.some((request) => request.method === "GET" && request.path === expectedQuery)).toBe(true);
-    expect(fixture.requests.some((request) => request.method === "GET" && request.path === "/media/fixture.mp4")).toBe(true);
+    expect(fixture.requests.some((request) => request.method === "GET" && (request.path === "/media/fixture.mp4" || request.path === "/view"))).toBe(true);
 }
 
 function requestContainsReference(request: (typeof fixture.requests)[number] | undefined) {
     if (!request) return false;
     const body = requestBodyText(request);
-    return /reference\.png|fixture\.png|iVBOR|input_reference|reference_images|image_urls|inlineData|image_url|"images"\s*:\s*\[\s*"http|"image"\s*:\s*\{/.test(body);
+    return /vozeb-[a-f0-9]{64}\.png|reference\.png|fixture\.png|iVBOR|input_reference|reference_images|image_urls|imageUrl|inlineData|image_url|"images"\s*:\s*\[\s*"http|"image"\s*:\s*\{/.test(body);
 }
 
 function requestBodyText(request: (typeof fixture.requests)[number] | undefined) {
     return request?.body.toString(request.contentType.includes("multipart/form-data") ? "latin1" : "utf8") || "";
+}
+
+function literalBaseProtocol(protocol: string) {
+    return protocol === "custom" || protocol === "runninghub";
+}
+
+function resolveFixtureUrl(value: string, baseUrl: string) {
+    if (/^https?:\/\//i.test(value)) return value;
+    return new URL(value, baseUrl).toString();
 }

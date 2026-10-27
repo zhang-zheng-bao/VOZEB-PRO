@@ -11,6 +11,18 @@ describe("splitDramaSource", () => {
         expect(result[1].script).toContain("第二章 真相");
     });
 
+    it("does not turn screenplay metadata before the first episode into an episode", () => {
+        const result = splitDramaSource(
+            "# 《穿墙术》漫剧剧本\n\n类型：古风奇幻\n主要角色：王生、清虚道长\n\n第1集 月下仙术\n王生推开门。\n\n第2集 穿墙秘法\n石壁泛起水波。\n\n第3集 墙还是墙\n王生撞上高墙。",
+            4000,
+        );
+
+        expect(result).toHaveLength(3);
+        expect(result[0]).toMatchObject({ title: "第 1 集 · 第1集 月下仙术", sourceRange: "第1集 月下仙术" });
+        expect(result[0].script).not.toContain("类型：古风奇幻");
+        expect(result[0].script).toContain("王生推开门");
+    });
+
     it("chunks unstructured long text without losing content", () => {
         const source = ["第一段".repeat(200), "第二段".repeat(200), "第三段".repeat(200)].join("\n\n");
         const result = splitDramaSource(source, 800);

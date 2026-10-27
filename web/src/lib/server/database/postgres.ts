@@ -259,6 +259,7 @@ type PostgresNotificationState = {
 };
 
 export function getDatabaseProvider(): DatabaseProvider {
+    if (["1", "true", "yes", "on"].includes(process.env.VOZEB_PRO_PERSONAL_MODE?.trim().toLowerCase() || "")) return "file";
     return process.env.VOZEB_PRO_DATABASE_PROVIDER?.trim().toLowerCase() === "file" ? "file" : "postgres";
 }
 

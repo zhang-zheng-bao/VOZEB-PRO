@@ -15,7 +15,7 @@ type FrameRole = Extract<VideoReferenceRole, "first_frame" | "last_frame">;
 
 const referenceModes: Array<{ value: CreativeVideoReferenceMode; label: string; description: string }> = [
     { value: "reference", label: "普通参考", description: "素材参与整体创作" },
-    { value: "first_frame", label: "首帧", description: "固定开始画面" },
+    { value: "first_frame", label: "首帧", description: "固定开场图片" },
     { value: "first_last", label: "首尾帧", description: "固定开始和结束" },
 ];
 
@@ -35,7 +35,7 @@ export function CanvasVideoReferenceSettings({
     const mode = normalizeCanvasVideoReferenceMode(metadata?.videoReferenceMode);
     const [activeRole, setActiveRole] = useState<FrameRole>("first_frame");
     const [feedback, setFeedback] = useState("");
-    const selectedRole = mode === "first_frame" ? "first_frame" : activeRole;
+    const selectedRole = mode === "first_last" ? activeRole : "first_frame";
     const frameOptions = references.filter((reference) => reference.kind === "image").map((reference) => ({ reference, selection: canvasVideoFrameSelection(reference) }));
 
     const updateMode = (nextMode: CreativeVideoReferenceMode) => {

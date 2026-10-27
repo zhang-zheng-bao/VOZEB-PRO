@@ -42,4 +42,5 @@ describe("admin channel workspace model", () => {
 
         expect(updateChannelInWorkspace(settings, channel.id, { enabled: false }).defaultModels.videoModel).toBe("");
     });
+
 });

@@ -131,6 +131,7 @@ export function useAdminDashboardState({ initialUsers, initialUserSummary, initi
     const [announcementSaving, setAnnouncementSaving] = useState(false);
     const [announcementModalOpen, setAnnouncementModalOpen] = useState(false);
     const [promptModalOpen, setPromptModalOpen] = useState(false);
+    const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null);
     const [announcementDraft, setAnnouncementDraft] = useState<Partial<PublicAnnouncement>>({ title: "", content: "", enabled: true, popupHome: false, popupAfterLogin: false });
     const [editingUser, setEditingUser] = useState<PublicUser | null>(null);
     const [creatingUser, setCreatingUser] = useState(false);
@@ -324,6 +325,8 @@ export function useAdminDashboardState({ initialUsers, initialUserSummary, initi
         setAnnouncementModalOpen,
         promptModalOpen,
         setPromptModalOpen,
+        editingPrompt,
+        setEditingPrompt,
         announcementDraft,
         setAnnouncementDraft,
         editingUser,

@@ -24,6 +24,7 @@ export default function nextConfig(phase: string): NextConfig {
         distDir,
         output: "standalone",
         outputFileTracingRoot: webDir,
+        serverExternalPackages: ["ssh2"],
         turbopack: { root: webDir },
         typescript: { ignoreBuildErrors: skipBuildTypeCheck },
         allowedDevOrigins: isDev ? ["*.*.*.*"] : [],

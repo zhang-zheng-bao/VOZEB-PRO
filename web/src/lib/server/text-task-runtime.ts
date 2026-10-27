@@ -16,6 +16,7 @@ import { maintenanceWorkerContextHeaders } from "@/lib/server/maintenance-auth";
 import { GenerationSubmissionSafeFailure, GenerationSubmissionUncertainError, generationSubmissionResponseError, generationSubmissionUncertainError } from "@/lib/server/generation-submission-error";
 import { resolveTextProtocol, type ResolvedTextProtocol } from "@/lib/server/text-protocol-resolver";
 import { refundTextTask, textTaskRefundIdempotencyKey } from "@/lib/server/text-task-refund";
+import { isPersonalMode } from "@/lib/server/personal-mode";
 
 configureServerProxyDispatcher();
 
@@ -95,8 +96,15 @@ export async function runTextTaskStep(task: TextTask, origin: string, cookie: st
             const message = toSafeGenerationErrorMessage(error, "文本生成失败");
             const latest = await getTextTask(task.id);
             if (latest?.status === "cancelled" || latest?.status === "success") return latest.status === "success" ? { state: "completed" } : { state: "failed", error: latest.error || "任务已取消" };
-            if (error instanceof GenerationSubmissionUncertainError) return { state: "needs_review", error: message };
-            if (!(error instanceof GenerationSubmissionSafeFailure)) return { state: "needs_review", error: generationSubmissionUncertainError(error, message).message };
+            if (error instanceof GenerationSubmissionUncertainError) {
+                if (isPersonalMode()) return failTextTask(candidateTask, message, attempts);
+                return { state: "needs_review", error: message };
+            }
+            if (!(error instanceof GenerationSubmissionSafeFailure)) {
+                const uncertain = generationSubmissionUncertainError(error, message).message;
+                if (isPersonalMode()) return failTextTask(candidateTask, uncertain, attempts);
+                return { state: "needs_review", error: uncertain };
+            }
             attempts = finishGenerationAttempt(attempts, candidateTask.attemptNo, { status: "failed", error: message });
             await updateTextTask(task.id, { attempts, attemptNo: candidateTask.attemptNo });
         }
@@ -182,7 +190,10 @@ async function createCustomTextTaskStep(task: TextTask, origin: string, cookie: 
 async function queryCustomTextTaskStep(task: TextTask, origin: string, cookie: string): Promise<TextTaskStep> {
     const config = task.config;
     const upstream = task.upstream;
-    if (!upstream?.id) return { state: "needs_review", error: "文本任务缺少上游任务 ID" };
+    if (!upstream?.id) {
+        const message = "文本任务缺少上游任务 ID";
+        return isPersonalMode() ? failTextTask(task, message, task.attempts || []) : { state: "needs_review", error: message };
+    }
     let lastError = "";
     for (const path of providerQueryPaths(config.advancedConfig, upstream.id, [])) {
         const response = await taskFetch(config, taskUrl(config, path, origin), { headers: taskHeaders(config, cookie), cache: "no-store" });

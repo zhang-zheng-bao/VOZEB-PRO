@@ -23,6 +23,7 @@ import { authorizedWorkerUserId } from "@/lib/server/maintenance-auth";
 import { authorizeGenerationMediaProxyRequest } from "@/lib/server/generation-media-access";
 import { userOwnsGenerationUpstreamTask } from "@/lib/server/generation-task-authorization";
 import { authorizeSystemAiProxyRequest } from "@/lib/server/system-ai-proxy-policy";
+import { runningHubOpenApiCreatePathAlias } from "@/lib/runninghub-openapi-alias";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -91,13 +92,15 @@ async function proxySystemRequest(request: Request, context: RouteContext) {
         if (error instanceof RequestBodyTooLargeError) return NextResponse.json({ error: error.message }, { status: error.status });
         throw error;
     }
-    const upstreamModel = readRequestModel(readRequestBody(contentType, requestBody.pointsPayload)) || request.headers.get(SYSTEM_AI_UPSTREAM_MODEL_HEADER)?.trim() || readPathModel(path);
+    const upstreamModel = request.headers.get(SYSTEM_AI_UPSTREAM_MODEL_HEADER)?.trim() || readRequestModel(readRequestBody(contentType, requestBody.pointsPayload)) || readPathModel(path);
     const modelConfig = upstreamModel ? resolveChannelModelConfig(channel.advancedConfig, upstreamModel) : undefined;
     const apiFormat = modelConfig?.apiFormat || channel.apiFormat;
     const globalChannel = isGlobalAiOpcChannel(channel.advancedConfig);
     const globalPreset = resolveGlobalAiOpcPreset(channel.advancedConfig, upstreamModel) || resolveGlobalAiOpcPathPreset(channel.advancedConfig, path);
     const globalAdaptation = adaptGlobalAiOpcTextRequest(channel.advancedConfig, path, requestBody.body);
     if (globalAdaptation === "responses-unsupported") return NextResponse.json({ error: "该 GlobalAiOpc 原生文本接口不支持 Responses，已切换 Chat 兼容回退。" }, { status: 404 });
+    const runningHubEquivalentCreatePaths = runningHubModelCreatePathAliases(modelConfig?.protocol || channel.advancedConfig?.protocol, upstreamModel);
+    const configuredCreatePaths = [globalPreset?.createPath, modelConfig?.createPath, modelConfig?.editPath, modelConfig?.imageToVideoPath, channel.advancedConfig?.createPath, channel.advancedConfig?.editPath, channel.advancedConfig?.imageToVideoPath, ...runningHubEquivalentCreatePaths];
     const pointsRequest =
         classifyPointsRequest(request.method, apiFormat, path, contentType, requestBody.pointsPayload, settings.generationPointMultipliers) ||
         classifyConfiguredPointsRequest(
@@ -106,7 +109,7 @@ async function proxySystemRequest(request: Request, context: RouteContext) {
             contentType,
             requestBody.pointsPayload,
             channel.id,
-            [globalPreset?.createPath, modelConfig?.createPath, modelConfig?.editPath, modelConfig?.imageToVideoPath, channel.advancedConfig?.createPath, channel.advancedConfig?.editPath, channel.advancedConfig?.imageToVideoPath],
+            configuredCreatePaths,
             upstreamModel,
             settings.logicalModels,
             settings.generationPointMultipliers,
@@ -124,7 +127,8 @@ async function proxySystemRequest(request: Request, context: RouteContext) {
         pointsUsageKind: pointsRequest?.usageKind,
         upstreamTaskIdHint: readRequestTaskId(readRequestBody(contentType, requestBody.pointsPayload)),
         paths: {
-            create: [globalPreset?.createPath, modelConfig?.createPath, modelConfig?.editPath, modelConfig?.imageToVideoPath, channel.advancedConfig?.createPath, channel.advancedConfig?.editPath, channel.advancedConfig?.imageToVideoPath],
+            create: configuredCreatePaths,
+            upload: (modelConfig?.protocol || channel.advancedConfig?.protocol) === "runninghub" ? ["/openapi/v2/media/upload/binary"] : [],
             query: [globalPreset?.queryPath, modelConfig?.queryPath, channel.advancedConfig?.queryPath],
             cancel: [
                 { path: modelConfig?.cancelPath, method: modelConfig?.cancelMethod },
@@ -133,12 +137,17 @@ async function proxySystemRequest(request: Request, context: RouteContext) {
         },
     });
     if (!access.allowed) return NextResponse.json({ error: access.error }, { status: access.status });
-    if (access.operation !== "create") {
+    if (access.operation !== "create" && access.operation !== "upload") {
         const owned = await userOwnsGenerationUpstreamTask({ userId, capability: access.capability, channelId: channel.id, upstreamModel, upstreamTaskId: access.upstreamTaskId });
         if (!owned) return NextResponse.json({ error: "任务不存在或无权访问" }, { status: 404 });
     }
 
-    const target = targetUrl(globalPreset?.baseUrl || channel.baseUrl, globalPreset?.apiFormat || apiFormat, globalAdaptation?.path || path, new URL(request.url).search, globalChannel, modelConfig?.protocol || channel.advancedConfig?.protocol);
+    const proxyPath = globalAdaptation?.path || path;
+    const protocol = modelConfig?.protocol || channel.advancedConfig?.protocol;
+    const runningHubQuery = protocol === "runninghub" && access.operation === "query" && isRunningHubQueryPath(proxyPath);
+    const target = runningHubQuery
+        ? literalTargetUrl(channel.baseUrl, ["openapi", "v2", "query"], "", apiFormat)
+        : targetUrl(globalPreset?.baseUrl || channel.baseUrl, globalPreset?.apiFormat || apiFormat, proxyPath, new URL(request.url).search, globalChannel, protocol);
     if (!(await isSafeOutboundUrl(target, { allowCredentials: false }))) return NextResponse.json({ error: "接口地址不允许访问内网或保留地址" }, { status: 400 });
     const headers = new Headers();
     if (contentType && !isMultipart) headers.set("content-type", contentType);
@@ -149,6 +158,7 @@ async function proxySystemRequest(request: Request, context: RouteContext) {
     if (clientRequestId) headers.set("x-client-request-id", clientRequestId);
     const authConfig = modelConfig?.protocol ? { ...channel.advancedConfig, protocol: modelConfig.protocol } : channel.advancedConfig;
     Object.entries(protocolAuthHeaders(channel.apiKey, authConfig, globalChannel ? "openai" : apiFormat)).forEach(([key, value]) => headers.set(key, value));
+    if (runningHubQuery) headers.set("content-type", "application/json");
     const callType = `${access.capability}:${access.operation}:/${(globalAdaptation?.path || path).join("/")}`;
     const businessRequestId = readVerifiedSystemAiBusinessRequestId(request.headers, access.logicalModelId, upstreamModel) || `direct:${randomUUID()}`;
     const pointsIdempotencyKey = pointsRequest ? systemAiPointsIdempotencyKey({ userId, businessRequestId, logicalModel: access.logicalModelId, channelId: channel.id, upstreamModel, callType }) : undefined;
@@ -187,9 +197,9 @@ async function proxySystemRequest(request: Request, context: RouteContext) {
     let upstream: Response;
     try {
         upstream = await fetchSafeOutbound(target, {
-            method: request.method,
+            method: runningHubQuery ? "POST" : request.method,
             headers,
-            body: globalAdaptation?.body || requestBody.body,
+            body: runningHubQuery ? JSON.stringify({ taskId: access.operation === "query" ? access.upstreamTaskId : "" }) : globalAdaptation?.body || requestBody.body,
             cache: "no-store",
             redirect: "manual",
             signal: request.signal,
@@ -233,6 +243,42 @@ function channelHasModel(models: string[], requested: string) {
                 .replace(/^models\//, "")
                 .toLowerCase() === target,
     );
+}
+
+function runningHubModelCreatePathAliases(protocol: import("@/lib/auth/store").SystemChannelProtocol | undefined, upstreamModel: string) {
+    if (protocol !== "runninghub") return [];
+    const model = upstreamModel.trim().toLowerCase();
+    const aliased = runningHubOpenApiCreatePathAlias(model);
+    if (aliased) return [aliased];
+    const veo = model.match(/^google\/(veo3\.1-(?:fast|lite|pro))\/(image-to-video|text-to-video|reference-to-video|start-end-to-video|video-extend)-(?:official-stable|channel-low-price)$/);
+    if (veo) return [`/openapi/v2/google/${veo[1]}/${veo[2]}`];
+    const seedance = model.match(/^seedance-2\.5\/(image-to-video|text-to-video|multimodal-video)\s+token$/);
+    if (seedance) return [`/openapi/v2/bytedance/seedance-2.5-token/${seedance[1]}`];
+    const globalSeedance = model.match(/^seedance-2\.0-global\/(image-to-video|text-to-video|multimodal-video)$/);
+    if (globalSeedance) return [`/openapi/v2/bytedance/seedance-2.0-global/${globalSeedance[1]}`];
+    const miniSeedance = model.match(/^seedance-2\.0-mini\/(image-to-video|text-to-video|multimodal-video)$/);
+    if (miniSeedance) return [`/openapi/v2/rhart-video/sparkvideo-2.0-mini/${miniSeedance[1]}`];
+    const seedanceFast = model.match(/^seedance2\.0 fast (image to video|text to video|multimodal video)$/);
+    if (seedanceFast) return [`/openapi/v2/rhart-video/sparkvideo-2.0-fast/${seedanceFast[1].replaceAll(" ", "-")}`];
+    const seedanceStandard = model.match(/^seedance2\.0 (image to video|text to video|multimodal video)$/);
+    if (seedanceStandard) return [`/openapi/v2/rhart-video/sparkvideo-2.0/${seedanceStandard[1].replaceAll(" ", "-")}`];
+    const klingDashed = model.match(/^(kling-(?:v2\.6|v3\.0)-(?:pro|std)|kling-v3-turbo-(?:pro|std)|kling-video-o3-4k|kling-video-o3-(?:pro|std)|kling-v3-4k)-(image-to-video|text-to-video|motion-control|reference-to-video|video-edit)$/);
+    if (klingDashed) return [`/openapi/v2/${klingDashed[1]}/${klingDashed[2]}`];
+    if (model === "xai/grok-imagine-video-v1.5/reference-to-video-official-stable") return ["/openapi/v2/rhart-video-g-official/reference-to-video-v1.5"];
+    if (model === "xai/grok-imagine-video/reference-to-video-official-stable") return ["/openapi/v2/rhart-video-g-official/reference-to-video"];
+    if (model === "xai/grok-imagine-video-v1.5/image-to-video-official-stable") return ["/openapi/v2/rhart-video-g-official/image-to-video-v1.5"];
+    if (model === "xai/grok-imagine/image-to-video-official-stable") return ["/openapi/v2/rhart-video-g-official/image-to-video"];
+    if (model === "xai / grok-imagine-video-v1.5 / text-to-video-official-stable") return ["/openapi/v2/rhart-video-g-official/text-to-video-v1.5"];
+    if (model === "xai/grok-imagine/text-to-video-official-stable") return ["/openapi/v2/rhart-video-g-official/text-to-video"];
+    if (model === "xai/grok-imagine/text-to-video-channel-low-price-v1.5") return ["/openapi/v2/rhart-video-g/text-to-video"];
+    if (model === "xai/grok-imagine/image-to-video-channel-low-price-v1.5") return ["/openapi/v2/rhart-video-g/image-to-video"];
+    if (model === "xai/grok-imagine-video/video-extend-official-stable") return ["/openapi/v2/rhart-video-g-official/video-extend"];
+    if (model === "xai/grok-imagine/edit-video-official-stable") return ["/openapi/v2/rhart-video-g-official/edit-video"];
+    if (/^vidu-image-to-video-q\d/.test(model)) return [`/openapi/v2/vidu/image-to-video-${model.match(/q\d-(?:turbo|pro(?:-fast)?)/)?.[0] || model.replace(/^vidu-image-to-video-/, "")}`];
+    if (/^vidu-start-end-to-video-q\d/.test(model)) return [`/openapi/v2/vidu/start-end-to-video-${model.match(/q\d-(?:turbo|pro(?:-fast)?)/)?.[0] || model.replace(/^vidu-start-end-to-video-/, "")}`];
+    if (/^vidu-text-to-video-q\d/.test(model)) return [`/openapi/v2/vidu/text-to-video-${model.match(/q\d-(?:turbo|pro(?:-fast)?)/)?.[0] || model.replace(/^vidu-text-to-video-/, "")}`];
+    if (/^vidu-reference-to-video-q\d/.test(model)) return [`/openapi/v2/vidu/reference-to-video-${model.match(/q\d(?:-[a-z]+)?/)?.[0] || model.replace(/^vidu-reference-to-video-/, "")}`];
+    return [];
 }
 
 type SystemMediaChannel = { id: string; baseUrl: string; apiFormat: ApiCallFormat; apiKey: string; advancedConfig?: import("@/lib/auth/store").SystemChannelAdvancedConfig };
@@ -455,7 +501,7 @@ function classifyConfiguredPointsRequest(
     const cleanPath = normalizedConfiguredProxyPath(`/${path.join("/")}`);
     if (!createPaths.some((createPath) => createPath && cleanPath === normalizedConfiguredProxyPath(createPath))) return null;
     const payload = readRequestBody(contentType, body);
-    const model = readRequestModel(payload) || modelHint;
+    const model = modelHint || readRequestModel(payload);
     if (!model) return null;
     const capability = logicalModels.find((logical) => logical.enabled && logical.bindings.some((binding) => binding.enabled && binding.channelId === channelId && sameModel(binding.upstreamModel, model)))?.capability;
     if (capability === "image") return { model, amount: readRequestCount(payload) * imageQualityMultiplier(payload, multipliers), usageKind: "image" };
@@ -588,7 +634,7 @@ function readMultipartFields(text: string): Record<string, string> {
 }
 
 function targetUrl(baseUrl: string, apiFormat: "openai" | "gemini", path: string[], search: string, globalAiOpc = false, protocol?: import("@/lib/auth/store").SystemChannelProtocol) {
-    const usesLiteralPath = protocol === "seedance-special" || protocol === "stable-diffusion" || protocol === "yumeng" || protocol === "custom";
+    const usesLiteralPath = protocol === "seedance-special" || protocol === "stable-diffusion" || protocol === "yumeng" || protocol === "runninghub" || protocol === "custom";
     const cleanPath = !usesLiteralPath && (path[0] === "v1" || path[0] === "v1beta") ? path.slice(1) : path;
     const resolvedBaseUrl = protocol === "yumeng" ? normalizeYumengModelCenterBaseUrl(baseUrl) : baseUrl;
     if (isAgnesApiBaseUrl(resolvedBaseUrl) && cleanPath[0]?.toLowerCase() === "agnesapi") {
@@ -597,6 +643,11 @@ function targetUrl(baseUrl: string, apiFormat: "openai" | "gemini", path: string
     }
     if (usesLiteralPath) return literalTargetUrl(resolvedBaseUrl, cleanPath, search, apiFormat);
     return `${normalizeApiBaseUrl(resolvedBaseUrl, apiFormat, globalAiOpc)}/${cleanPath.map((segment) => encodeTargetPathSegment(segment, apiFormat)).join("/")}${search}`;
+}
+
+function isRunningHubQueryPath(path: string[]) {
+    const clean = path.map((segment) => safeDecodeURIComponent(segment).toLowerCase());
+    return clean[0] === "openapi" && clean[1] === "v2" && clean[2] === "query";
 }
 
 function literalTargetUrl(baseUrl: string, path: string[], search: string, apiFormat: "openai" | "gemini") {

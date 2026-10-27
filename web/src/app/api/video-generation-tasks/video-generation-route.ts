@@ -1,10 +1,13 @@
 import { after, NextResponse } from "next/server";
+import { readFile, stat } from "node:fs/promises";
+import { basename, resolve, sep } from "node:path";
 import { readJsonBody } from "@/lib/auth/request";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getAuthSettings, isAuthInputError, refundUserPoints } from "@/lib/auth/store";
 import { generationModelId, toSystemGenerationChannel } from "@/lib/server/generation-channel";
 import { finishGenerationAttempt, startGenerationAttempt, type GenerationAttempt } from "@/lib/server/generation-attempt";
 import { fetchInternalApi, resolveInternalOrigin } from "@/lib/server/internal-origin";
+import { fetchSafeOutbound } from "@/lib/server/safe-outbound-fetch";
 import { resolveLogicalModelCandidates } from "@/lib/server/logical-model-router";
 import { assertReferenceCapabilities, assertReferenceUrls, assertVideoReferenceRoles, buildVideoProviderRequest, isProviderBusinessError, readProviderError, readProviderString, resolvedProviderCreatePaths } from "@/lib/server/provider-task-config";
 import { buildGlobalAiOpcVideoRequest, resolveGlobalAiOpcPreset } from "@/lib/globalaiopc-catalog";
@@ -28,9 +31,13 @@ import { systemAiBillingHeaders } from "@/lib/server/system-ai-billing";
 import { maintenanceWorkerContextHeaders, requestRuntimeCredential } from "@/lib/server/maintenance-auth";
 import { resolvePublicRequestOrigin } from "@/lib/server/public-request-origin";
 import { writeVideoGenerationLog } from "@/lib/server/video-task-log";
+import { GENERATION_MEDIA_ROOT, REFERENCE_MEDIA_ROOT } from "@/lib/server/local-media-storage";
+import { getLocalMediaRegistration } from "@/lib/server/local-media-registry";
 import { buildOpenAiVideoFormData } from "./video-task-openai";
 import { normalizeVideoGenerationReferences, regularVideoReferences, videoFrameReferences, type VideoGenerationReference } from "@/lib/video-reference-contract";
 import { assertYumengVideoReferences, buildYumengVideoRequest } from "@/lib/yumeng-model-center";
+import { runningHubOpenApiCreatePathAlias } from "@/lib/runninghub-openapi-alias";
+import { ensureComfyUiReference } from "@/lib/server/comfyui-reference-upload";
 
 const CREATE_PATHS = ["/video/generations", "/videos/generations", "/videos/videos", "/videos"];
 type CreateVideoTaskBody = { config?: Record<string, unknown>; prompt?: string; references?: VideoGenerationReference[]; source?: string; context?: GenerationTaskContext };
@@ -61,6 +68,8 @@ export async function POST(request: Request) {
     const settings = await getAuthSettings();
     const response = await withGenerationConcurrencyLimit(user.id, "video", 30 * 60_000, settings.generationConcurrency.video, async () => {
         const requestedModel = typeof body.config?.model === "string" && body.config.model.trim() ? body.config.model : settings.defaultModels.videoModel;
+        const unavailableReason = unavailableRunningHubVideoModelReason(requestedModel);
+        if (unavailableReason) return NextResponse.json({ error: unavailableReason }, { status: 400 });
         const channels = resolveLogicalModelCandidates(settings, "video", requestedModel).map(toSystemGenerationChannel);
         const prompt = String(body.prompt || "").trim();
         if (!channels.length || !prompt) return NextResponse.json({ error: "视频任务参数不完整或渠道不支持" }, { status: 400 });
@@ -82,15 +91,20 @@ export async function POST(request: Request) {
         let localTask: VideoTask | undefined;
         for (let index = 0; index < channels.length; index += 1) {
             const channel = channels[index];
+            const channelUnavailableReason = unavailableRunningHubVideoModelReason(channel.model);
+            if (channelUnavailableReason) {
+                capabilityError = new SafeCandidateFailure(channelUnavailableReason);
+                continue;
+            }
             const geminiVideo = isGeminiVideoChannel(channel);
             const parameters = {
                 ...requestedParameters,
                 videoSeconds: geminiVideo
                     ? normalizeGeminiVideoDuration(requestedParameters.videoSeconds)
-                    : resolveUpstreamVideoDuration(requestedParameters.videoSeconds, settings.generationDefaults.videoSeconds, {
+                      : resolveUpstreamVideoDuration(requestedParameters.videoSeconds, settings.generationDefaults.videoSeconds, {
                           durationRange: channel.advancedConfig?.durationRange,
-                          minDurationSeconds: channel.capabilityProfile?.minDurationSeconds,
-                          maxDurationSeconds: channel.capabilityProfile?.maxDurationSeconds,
+                          minDurationSeconds: Math.max(channel.capabilityProfile?.minDurationSeconds || 0, runningHubGrokMinimumDuration(channel.model)),
+                          maxDurationSeconds: runningHubGrokMaximumDuration(channel.model) || channel.capabilityProfile?.maxDurationSeconds,
                       }),
             };
             try {
@@ -218,16 +232,29 @@ export async function createUpstream(
     multipliers: Awaited<ReturnType<typeof getAuthSettings>>["generationPointMultipliers"],
     billingRequestId: string,
 ) {
+    if (channel.advancedConfig?.protocol === "comfyui") {
+        const localReferences = [];
+        for (const reference of references) {
+            const local = await localProviderReferenceFile(clean(reference.url));
+            localReferences.push(local ? { type: reference.type, ...local } : { type: reference.type, url: clean(reference.url) });
+        }
+        return createComfyUiVideoUpstream({ channel, prompt, raw, references: localReferences });
+    }
     let lastError = "";
-    const regularReferences = regularVideoReferences(references);
+    const providerReferences = await prepareProviderVideoReferences(channel, references);
+    const providerRegularReferences = regularVideoReferences(providerReferences);
     const { firstFrame, lastFrame } = videoFrameReferences(references);
-    const images = referenceUrls(regularReferences, "image");
-    const videos = referenceUrls(regularReferences, "video");
-    const audios = referenceUrls(regularReferences, "audio");
-    const requestImage = images[0] || "";
-    const requestImages = images;
-    const firstFrameUrl = firstFrame?.url || "";
-    const lastFrameUrl = lastFrame?.url || "";
+    const providerFrames = videoFrameReferences(providerReferences);
+    const images = referenceUrls(providerRegularReferences, "image");
+    const videos = referenceUrls(providerRegularReferences, "video");
+    const audios = referenceUrls(providerRegularReferences, "audio");
+    const firstFrameUrl = providerFrames.firstFrame?.url || firstFrame?.url || "";
+    const lastFrameUrl = providerFrames.lastFrame?.url || lastFrame?.url || "";
+    const requestImage = images[0] || firstFrameUrl || "";
+    const requestImages = images.length ? images : firstFrameUrl ? [firstFrameUrl] : [];
+    if (channel.advancedConfig?.protocol === "runninghub" && /image-to-video|i2v/i.test(channel.model) && !requestImage) {
+        throw new SafeCandidateFailure("当前图生视频模型需要连接一张参考图片");
+    }
     const dimensions = videoDimensions(raw.size, raw.vquality);
     const generateAudio = raw.videoGenerateAudio !== false && raw.videoGenerateAudio !== "false";
     if (isGeminiVideoChannel(channel)) {
@@ -252,8 +279,8 @@ export async function createUpstream(
         image: requestImage,
         video: videos[0] || "",
         audio: audios[0] || "",
-        references,
-        content: videoReferenceContent(prompt, references),
+        references: providerReferences,
+        content: videoReferenceContent(prompt, providerReferences),
         first_frame: firstFrameUrl,
         first_frame_url: firstFrameUrl,
         last_frame: lastFrameUrl,
@@ -274,7 +301,7 @@ export async function createUpstream(
         ...(requestImages.length ? { images: requestImages, image_urls: requestImages, reference_images: requestImages } : {}),
         ...(videos.length ? { video: videos[0], videos, reference_videos: videos } : {}),
         ...(audios.length ? { audio: audios[0], audios, reference_audios: audios } : {}),
-        ...(references.length ? { ref_assets: references.map((item) => ({ type: item.type, url: item.url, role: item.role || "reference" })) } : {}),
+        ...(providerReferences.length ? { ref_assets: providerReferences.map((item) => ({ type: item.type, url: item.url, role: item.role || "reference" })) } : {}),
         ...(firstFrameUrl ? { first_frame: firstFrameUrl, first_frame_url: firstFrameUrl } : {}),
         ...(lastFrameUrl ? { last_frame: lastFrameUrl, last_frame_url: lastFrameUrl } : {}),
     };
@@ -301,7 +328,7 @@ export async function createUpstream(
                   duration: values.duration === -1 ? 5 : (values.duration as number),
                   ratio: values.ratio as string,
                   generateAudio,
-                  references,
+                  references: providerReferences,
               })
             : channel.advancedConfig?.protocol === "yumeng"
               ? buildYumengVideoRequest({
@@ -333,11 +360,12 @@ export async function createUpstream(
                       lastFrame: lastFrameUrl || undefined,
                   })
                 : buildVideoProviderRequest(channel.advancedConfig?.requestTemplate, defaults, values);
+    const providerPayload = channel.advancedConfig?.protocol === "runninghub" ? normalizeRunningHubVideoPayload(payload, channel.model, generateAudio) : payload;
     const requestBody = multipart
         ? await buildOpenAiVideoFormData({ model: channel.model, prompt, seconds: values.seconds as number, width: dimensions.width, height: dimensions.height, imageUrls: firstFrameUrl ? [firstFrameUrl] : images, origin, cookie })
-        : JSON.stringify(payload);
+        : JSON.stringify(providerPayload);
     const imageToVideoPath = images.length || firstFrameUrl ? channel.advancedConfig?.imageToVideoPath?.trim() : "";
-    const createPaths = globalPreset ? [globalPreset.createPath] : imageToVideoPath ? [imageToVideoPath] : resolvedProviderCreatePaths(channel.advancedConfig, "video", CREATE_PATHS);
+    const createPaths = (globalPreset ? [globalPreset.createPath] : imageToVideoPath ? [imageToVideoPath] : resolvedProviderCreatePaths(channel.advancedConfig, "video", CREATE_PATHS)).map((path) => normalizeRunningHubCreatePath(channel, path));
     for (const path of createPaths) {
         const response = await proxyFetch(origin, channel.baseUrl, path, cookie, {
             method: "POST",
@@ -378,7 +406,8 @@ export async function createUpstream(
             const pointsCost = billedPointsCost(response.headers.get("x-vozeb-pro-points-cost"));
             const pointsRecordId = response.headers.get("x-vozeb-pro-points-record-id") || undefined;
             if (pointsCost !== undefined && pointsRecordId) await refundUserPoints(userId, generationModelId(channel), pointsCost, "video", videoUnits(raw, multipliers), undefined, pointsRecordId);
-            throw new Error(providerError || "视频接口没有返回任务 ID");
+            if (providerError) throw new SafeCandidateFailure(providerError);
+            throw new Error("视频接口没有返回任务 ID");
         }
         return {
             id,
@@ -473,6 +502,61 @@ function isGeminiVideoChannel(channel: NonNullable<ReturnType<typeof toSystemGen
     return channel.apiFormat === "gemini" && channel.advancedConfig?.protocol !== "globalaiopc";
 }
 
+async function createComfyUiVideoUpstream(input: {
+    channel: NonNullable<ReturnType<typeof toSystemGenerationChannel>>;
+    prompt: string;
+    raw: Record<string, unknown>;
+    references: Array<{ type: "image" | "video" | "audio"; filePath?: string; fileName?: string; mimeType?: string; url?: string }>;
+}) {
+    const { buildComfyUiVideoRequest, comfyUiReferenceMediaType } = await import("@/lib/server/comfyui-video-provider");
+    const baseUrl = input.channel.providerBaseUrl || input.channel.baseUrl.replace(/^\/api\/ai\/system\/[^/]+\/?/, "http://127.0.0.1:8188");
+    await assertComfyUiReachable(baseUrl);
+    const uploaded: Array<{ type: "image" | "video" | "audio"; name: string }> = [];
+    for (let index = 0; index < input.references.length; index += 1) {
+        const reference = input.references[index];
+        const media = await comfyUiUploadMedia(reference, index);
+        const mediaType = comfyUiReferenceMediaType(media.mimeType);
+        if (!mediaType) throw new Error(`ComfyUI 不支持 ${media.mimeType} 类型的参考素材`);
+        if (mediaType !== reference.type) throw new Error(`参考素材类型不匹配：${reference.type} vs ${mediaType}`);
+        const name = await ensureComfyUiReference({ baseUrl, bytes: media.bytes, mimeType: media.mimeType, extension: mediaExtension(media.mimeType, mediaType) });
+        uploaded.push({ type: mediaType, name });
+    }
+    const { graph } = buildComfyUiVideoRequest({ config: input.channel.advancedConfig, prompt: input.prompt, raw: input.raw, references: uploaded });
+    const response = await fetchSafeOutbound(`${baseUrl}/prompt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: graph }),
+        signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) throw new Error(`ComfyUI 提交失败：${response.status}`);
+    const result = (await response.json()) as { prompt_id?: string };
+    if (!result.prompt_id) throw new Error("ComfyUI 未返回任务 ID");
+    return { id: `prompt:${result.prompt_id}`, provider: "generation" as const, model: input.channel.model, pollPath: "/prompt", queryPath: `/history/${result.prompt_id}` };
+}
+
+async function assertComfyUiReachable(baseUrl: string) {
+    try {
+        const response = await fetchSafeOutbound(`${baseUrl}/system_stats`, { cache: "no-store", signal: AbortSignal.timeout(5_000) });
+        if (!response.ok) throw new SafeCandidateFailure(`ComfyUI 服务器不可用（${response.status}）`);
+    } catch (error) {
+        if (error instanceof SafeCandidateFailure) throw error;
+        throw new SafeCandidateFailure("ComfyUI 服务器离线，请启动服务器或恢复连接后重试。");
+    }
+}
+
+async function comfyUiUploadMedia(reference: { type: "image" | "video" | "audio"; filePath?: string; fileName?: string; mimeType?: string; url?: string }, index: number) {
+    if (reference.filePath) {
+        const bytes = await readFile(reference.filePath);
+        return { bytes, mimeType: reference.mimeType || mediaMimeType(reference.filePath), fileName: reference.fileName || basename(reference.filePath) };
+    }
+    const url = clean(reference.url);
+    if (!url) throw new SafeCandidateFailure("ComfyUI 参考素材地址无效");
+    const response = await fetchSafeOutbound(url, { cache: "no-store", signal: AbortSignal.timeout(120_000) });
+    if (!response.ok) throw new Error(`ComfyUI 参考素材读取失败：${response.status}`);
+    const mimeType = response.headers.get("content-type")?.split(";")[0]?.trim() || fallbackComfyUiMimeType(reference.type);
+    return { bytes: await response.arrayBuffer(), mimeType, fileName: reference.fileName || `reference-${index + 1}${mediaExtension(mimeType, reference.type)}` };
+}
+
 function proxyFetch(origin: string, baseUrl: string, path: string, cookie: string, init: RequestInit) {
     const headers = new Headers(init.headers);
     const workerHeaders = maintenanceWorkerContextHeaders(cookie);
@@ -544,6 +628,227 @@ function videoReferenceContent(prompt: string, references: readonly VideoGenerat
 function requestPublicOrigin(request: Request) {
     return resolvePublicRequestOrigin(request);
 }
+
+function normalizeRunningHubVideoPayload(payload: Record<string, unknown> | undefined, model: string, generateAudio: boolean) {
+    if (!payload) return payload;
+    const next = { ...payload };
+    if (/^vidu[-/]image[-/]to[-/]video[-/]q\d/i.test(model) && typeof next.imageUrl === "string" && next.imageUrl.trim()) {
+        return {
+            prompt: next.prompt,
+            imageUrl: next.imageUrl,
+            duration: String(next.duration || next.seconds || "5"),
+            resolution: next.resolution || "720p",
+            movementAmplitude: next.movementAmplitude || "auto",
+            bgm: generateAudio,
+        };
+    }
+    if (/image-to-video|i2v/i.test(model) && typeof next.imageUrl === "string" && next.imageUrl.trim()) {
+        delete next.imageUrls;
+        delete next.images;
+        delete next.image_urls;
+        delete next.reference_images;
+    }
+    return next;
+}
+
+function normalizeRunningHubCreatePath(channel: NonNullable<ReturnType<typeof toSystemGenerationChannel>>, path: string) {
+    if (channel.advancedConfig?.protocol !== "runninghub") return path;
+    const model = channel.model.toLowerCase();
+    const aliased = runningHubOpenApiCreatePathAlias(model);
+    if (aliased) return aliased;
+    const veo = model.match(/^google\/(veo3\.1-(?:fast|lite|pro))\/(image-to-video|text-to-video|reference-to-video|start-end-to-video|video-extend)-(?:official-stable|channel-low-price)$/);
+    if (veo) return `/openapi/v2/google/${veo[1]}/${veo[2]}`;
+    const seedance = model.match(/^seedance-2\.5\/(image-to-video|text-to-video|multimodal-video)\s+token$/);
+    if (seedance) return `/openapi/v2/bytedance/seedance-2.5-token/${seedance[1]}`;
+    const globalSeedance = model.match(/^seedance-2\.0-global\/(image-to-video|text-to-video|multimodal-video)$/);
+    if (globalSeedance) return `/openapi/v2/bytedance/seedance-2.0-global/${globalSeedance[1]}`;
+    const miniSeedance = model.match(/^seedance-2\.0-mini\/(image-to-video|text-to-video|multimodal-video)$/);
+    if (miniSeedance) return `/openapi/v2/rhart-video/sparkvideo-2.0-mini/${miniSeedance[1]}`;
+    const seedanceFast = model.match(/^seedance2\.0 fast (image to video|text to video|multimodal video)$/);
+    if (seedanceFast) return `/openapi/v2/rhart-video/sparkvideo-2.0-fast/${seedanceFast[1].replaceAll(" ", "-")}`;
+    const seedanceStandard = model.match(/^seedance2\.0 (image to video|text to video|multimodal video)$/);
+    if (seedanceStandard) return `/openapi/v2/rhart-video/sparkvideo-2.0/${seedanceStandard[1].replaceAll(" ", "-")}`;
+    const klingDashed = model.match(/^(kling-(?:v2\.6|v3\.0)-(?:pro|std)|kling-v3-turbo-(?:pro|std)|kling-video-o3-4k|kling-video-o3-(?:pro|std)|kling-v3-4k)-(image-to-video|text-to-video|motion-control|reference-to-video|video-edit)$/);
+    if (klingDashed) return `/openapi/v2/${klingDashed[1]}/${klingDashed[2]}`;
+    if (model === "xai/grok-imagine-video-v1.5/reference-to-video-official-stable") return "/openapi/v2/rhart-video-g-official/reference-to-video-v1.5";
+    if (model === "xai/grok-imagine-video/reference-to-video-official-stable") return "/openapi/v2/rhart-video-g-official/reference-to-video";
+    if (model === "xai/grok-imagine-video-v1.5/image-to-video-official-stable") return "/openapi/v2/rhart-video-g-official/image-to-video-v1.5";
+    if (model === "xai/grok-imagine/image-to-video-official-stable") return "/openapi/v2/rhart-video-g-official/image-to-video";
+    if (model === "xai / grok-imagine-video-v1.5 / text-to-video-official-stable") return "/openapi/v2/rhart-video-g-official/text-to-video-v1.5";
+    if (model === "xai/grok-imagine/text-to-video-official-stable") return "/openapi/v2/rhart-video-g-official/text-to-video";
+    if (model === "xai/grok-imagine/text-to-video-channel-low-price-v1.5") return "/openapi/v2/rhart-video-g/text-to-video";
+    if (model === "xai/grok-imagine/image-to-video-channel-low-price-v1.5") return "/openapi/v2/rhart-video-g/image-to-video";
+    if (model === "xai/grok-imagine-video/video-extend-official-stable") return "/openapi/v2/rhart-video-g-official/video-extend";
+    if (model === "xai/grok-imagine/edit-video-official-stable") return "/openapi/v2/rhart-video-g-official/edit-video";
+    if (/^vidu-image-to-video-q\d/.test(model)) return `/openapi/v2/vidu/image-to-video-${model.match(/q\d-(?:turbo|pro(?:-fast)?)/)?.[0] || model.replace(/^vidu-image-to-video-/, "")}`;
+    if (/^vidu-start-end-to-video-q\d/.test(model)) return `/openapi/v2/vidu/start-end-to-video-${model.match(/q\d-(?:turbo|pro(?:-fast)?)/)?.[0] || model.replace(/^vidu-start-end-to-video-/, "")}`;
+    if (/^vidu-text-to-video-q\d/.test(model)) return `/openapi/v2/vidu/text-to-video-${model.match(/q\d-(?:turbo|pro(?:-fast)?)/)?.[0] || model.replace(/^vidu-text-to-video-/, "")}`;
+    if (/^vidu-reference-to-video-q\d/.test(model)) return `/openapi/v2/vidu/reference-to-video-${model.match(/q\d(?:-[a-z]+)?/)?.[0] || model.replace(/^vidu-reference-to-video-/, "")}`;
+    return path;
+}
+
+function runningHubGrokMinimumDuration(model: string) {
+    const name = model.toLowerCase();
+    return name.includes("grok-imagine-video") ? 6 : 0;
+}
+
+function runningHubGrokMaximumDuration(model: string) {
+    const name = model.toLowerCase();
+    return name.includes("grok-imagine-video") ? 15 : 0;
+}
+
+function unavailableRunningHubVideoModelReason(model: string) {
+    const name = clean(model).toLowerCase();
+    if (name === "xai/grok-imagine-video/reference-to-video-official-stable" || name === "rh-video-xai-grok-imagine-video-reference-to-video-official-stable-d29de666") {
+        return "这个旧 Grok 全能参考模型已在 RunningHub CN 节点下线，请改用 Grok v1.5 全能参考。";
+    }
+    if (name === "vidu-image-to-video-q2-turbo" || name === "rh-video-vidu-image-to-video-q2-turbo-1f3cb21b") {
+        return "Vidu Q2 Turbo 图生视频接口当前在 RunningHub 返回链接无效，请改用 Vidu Q2 Pro、Seedance 或 Kling 首帧模型。";
+    }
+    return "";
+}
+
+async function prepareProviderVideoReferences(channel: NonNullable<ReturnType<typeof toSystemGenerationChannel>>, references: VideoGenerationReference[]) {
+    if (channel.advancedConfig?.protocol !== "runninghub" || !references.length) return references;
+    const uploaded = new Map<string, string>();
+    const next: VideoGenerationReference[] = [];
+    for (const reference of references) {
+        const source = clean(reference.url);
+        const local = await localProviderReferenceFile(source);
+        if (!local) {
+            next.push(reference);
+            continue;
+        }
+        const cacheKey = `${local.filePath}\0${local.mimeType}`;
+        const uploadedUrl = uploaded.get(cacheKey) || (await uploadRunningHubReference(channel, local));
+        uploaded.set(cacheKey, uploadedUrl);
+        next.push({ ...reference, url: uploadedUrl });
+    }
+    return next;
+}
+
+async function localProviderReferenceFile(value: string): Promise<{ filePath: string; fileName: string; mimeType: string } | null> {
+    const token = localReferenceToken(value);
+    if (!token) return null;
+    const candidates = [
+        { scope: "reference" as const, root: REFERENCE_MEDIA_ROOT },
+        { scope: "generation" as const, root: GENERATION_MEDIA_ROOT },
+    ];
+    for (const candidate of candidates) {
+        const filePath = safeLocalMediaPath(candidate.root, token);
+        if (!filePath) continue;
+        const info = await stat(/*turbopackIgnore: true*/ filePath).catch(() => null);
+        if (!info?.isFile() || info.size <= 0) continue;
+        const registration = await getLocalMediaRegistration(token);
+        const mimeType = registration?.scope === candidate.scope && registration.mimeType ? registration.mimeType : mediaMimeType(filePath);
+        return { filePath, fileName: registration?.originalName || basename(filePath), mimeType };
+    }
+    return null;
+}
+
+function localReferenceToken(value: string) {
+    const raw = clean(value);
+    if (!raw) return "";
+    try {
+        const url = new URL(raw, "http://vozeb.local");
+        const prefixes = ["/api/reference-assets/", "/api/generation-log-assets/"];
+        for (const prefix of prefixes) {
+            if (!url.pathname.startsWith(prefix)) continue;
+            return url.pathname
+                .slice(prefix.length)
+                .split("/")
+                .map((part) => decodeURIComponent(part))
+                .join("/");
+        }
+    } catch {
+        // Fall through to storage-key handling.
+    }
+    return /^(?:temporary|permanent)\//i.test(raw) ? raw.replace(/\\/g, "/").replace(/^\/+/, "") : "";
+}
+
+function safeLocalMediaPath(root: string, token: string) {
+    if (!token || token.includes("\0")) return "";
+    const normalizedRoot = resolve(root);
+    const filePath = resolve(normalizedRoot, token);
+    return filePath !== normalizedRoot && filePath.startsWith(`${normalizedRoot}${sep}`) ? filePath : "";
+}
+
+async function uploadRunningHubReference(channel: NonNullable<ReturnType<typeof toSystemGenerationChannel>>, local: { filePath: string; fileName: string; mimeType: string }) {
+    const apiKey = clean(channel.providerApiKey);
+    if (!apiKey) throw new Error("RunningHub 参考素材上传失败：系统通道缺少 API Key");
+    const endpoint = runningHubOpenApiUrl(channel.providerBaseUrl || "https://www.runninghub.ai", "media/upload/binary");
+    const bytes = await readFile(/*turbopackIgnore: true*/ local.filePath);
+    const form = new FormData();
+    form.append("file", new Blob([bytes], { type: local.mimeType || "application/octet-stream" }), local.fileName || basename(local.filePath));
+    const response = await fetchSafeOutbound(endpoint, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+        body: form,
+        signal: AbortSignal.timeout(120_000),
+    });
+    const text = await response.text();
+    let payload: unknown = {};
+    try {
+        payload = text ? parseVideoProviderJson(text) : {};
+    } catch {
+        payload = {};
+    }
+    if (!response.ok) throw new Error(readVideoProviderHttpError(text, response.status));
+    const url = readRunningHubUploadUrl(payload);
+    if (!url) throw new Error("RunningHub 上传参考素材后没有返回可用 URL");
+    return url;
+}
+
+function runningHubOpenApiUrl(baseUrl: string, path: string) {
+    const base = clean(baseUrl).replace(/\/+$/, "") || "https://www.runninghub.ai";
+    const openApiBase = base.endsWith("/openapi/v2") ? base : `${base}/openapi/v2`;
+    return `${openApiBase}/${path.replace(/^\/+/, "")}`;
+}
+
+function readRunningHubUploadUrl(payload: unknown): string {
+    if (!payload || typeof payload !== "object") return "";
+    const candidates = [payload, (payload as Record<string, unknown>).data].filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+    for (const item of candidates) {
+        for (const key of ["download_url", "downloadUrl", "url", "fileUrl", "file_url"]) {
+            const value = item[key];
+            if (typeof value === "string" && /^https?:\/\//i.test(value.trim())) return value.trim();
+        }
+    }
+    return "";
+}
+
+function mediaMimeType(filePath: string) {
+    const lower = filePath.toLowerCase();
+    if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+    if (lower.endsWith(".webp")) return "image/webp";
+    if (lower.endsWith(".gif")) return "image/gif";
+    if (lower.endsWith(".mp4")) return "video/mp4";
+    if (lower.endsWith(".webm")) return "video/webm";
+    if (lower.endsWith(".mov")) return "video/quicktime";
+    if (lower.endsWith(".wav")) return "audio/wav";
+    if (lower.endsWith(".ogg")) return "audio/ogg";
+    if (lower.endsWith(".aac")) return "audio/aac";
+    if (lower.endsWith(".flac")) return "audio/flac";
+    if (lower.endsWith(".mp3")) return "audio/mpeg";
+    return "application/octet-stream";
+}
+
+function fallbackComfyUiMimeType(type: "image" | "video" | "audio") {
+    return type === "image" ? "image/png" : type === "video" ? "video/mp4" : "audio/mpeg";
+}
+
+function mediaExtension(mimeType: string, type: "image" | "video" | "audio") {
+    const lower = mimeType.toLowerCase();
+    if (lower.includes("jpeg")) return ".jpg";
+    if (lower.includes("png")) return ".png";
+    if (lower.includes("webp")) return ".webp";
+    if (lower.includes("mp4")) return ".mp4";
+    if (lower.includes("webm")) return ".webm";
+    if (lower.includes("mpeg")) return type === "audio" ? ".mp3" : ".mpeg";
+    if (lower.includes("wav")) return ".wav";
+    return type === "image" ? ".png" : type === "video" ? ".mp4" : ".mp3";
+}
+
 function normalizePublicOrigin(value: string) {
     try {
         const url = new URL(value.trim());

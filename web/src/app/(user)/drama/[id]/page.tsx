@@ -21,7 +21,7 @@ import { DramaGenerationPanel } from "./drama-generation-panel";
 import { DramaReviewPanel } from "./drama-review-panel";
 import { DramaStoryboardShotCard } from "./drama-storyboard-shot-card";
 import { DramaVersionModal } from "./drama-project-modals";
-import { dramaGenerationSize, estimateTaskPoints, referenceImage, shotReferenceImages, storyboardReferenceImages } from "./drama-shot-generation-utils";
+import { dramaGenerationSize, estimateTaskPoints, referenceImage, selectDramaStoryboardImageModel, shotReferenceImages, storyboardReferenceImages } from "./drama-shot-generation-utils";
 import { useGenerationCapacityRetry } from "./use-generation-capacity-retry";
 import { DramaEpisodeSidebar, DramaScriptPanel, DramaWorkspaceHeader, type DramaProjectStage } from "./drama-project-sections";
 
@@ -68,6 +68,7 @@ function DramaProjectEditor({ project }: { project: DramaProject }) {
     const listVersions = useDramaStore((state) => state.listVersions);
     const restoreVersion = useDramaStore((state) => state.restoreVersion);
     const config = useEffectiveConfig();
+    const storyboardImageModel = selectDramaStoryboardImageModel(config, project);
     const startingShotRef = useRef("");
     const storyboardTaskRef = useRef("");
     const [stage, setStage] = useState<DramaProjectStage>("script");
@@ -106,7 +107,7 @@ function DramaProjectEditor({ project }: { project: DramaProject }) {
         if (!episode.script.trim()) return message.warning("请先填写剧本内容");
         setAnalyzing(true);
         try {
-            const response = await fetch("/api/drama/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phase: "content", script: episode.script, summary: project.summary, style: project.style }) });
+            const response = await fetch("/api/drama/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phase: "content", script: episode.script, summary: project.summary, style: project.visualStylePrompt || project.style }) });
             syncUserPointsFromHeaders(response.headers, "system");
             const payload = (await response.json().catch(() => ({}))) as { data?: DramaContentAnalysis; msg?: string };
             if (!response.ok || !payload.data) throw new Error(payload.msg || "AI 剧本解析失败");
@@ -128,7 +129,7 @@ function DramaProjectEditor({ project }: { project: DramaProject }) {
             const response = await fetch("/api/drama/analyze", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ phase: "visual", summary: project.summary, style: project.style, episode, characters: project.characters, scenes: project.scenes, props: project.props, clues: project.clues, shots: episode.shots }),
+                body: JSON.stringify({ phase: "visual", summary: project.summary, style: project.visualStylePrompt || project.style, episode, characters: project.characters, scenes: project.scenes, props: project.props, clues: project.clues, shots: episode.shots }),
             });
             syncUserPointsFromHeaders(response.headers, "system");
             const payload = (await response.json().catch(() => ({}))) as { data?: DramaVisualAnalysis; msg?: string };
@@ -170,7 +171,7 @@ function DramaProjectEditor({ project }: { project: DramaProject }) {
             const key = `${episode.id}:${runningEnd.id}:${runningEnd.storyboardEndTaskId}`;
             if (storyboardTaskRef.current === key) return;
             storyboardTaskRef.current = key;
-            const imageConfig = { ...config, model: config.imageModel || config.model, imageModel: config.imageModel || config.model, size: project.ratio, count: "1" };
+            const imageConfig = { ...config, model: storyboardImageModel, imageModel: storyboardImageModel, size: project.ratio, count: "1" };
             void waitForImageGenerationTask(imageConfig, { id: runningEnd.storyboardEndTaskId!, kind: "generation", model: imageConfig.model })
                 .then((result) => {
                     const imageUrl = stableTaskUrl(result.remoteUrl, result.serverUrl, result.dataUrl);
@@ -195,7 +196,7 @@ function DramaProjectEditor({ project }: { project: DramaProject }) {
             const key = `${episode.id}:${running.id}:${running.storyboardTaskId}`;
             if (storyboardTaskRef.current === key) return;
             storyboardTaskRef.current = key;
-            const imageConfig = { ...config, model: config.imageModel || config.model, imageModel: config.imageModel || config.model, size: project.ratio, count: "1" };
+            const imageConfig = { ...config, model: storyboardImageModel, imageModel: storyboardImageModel, size: project.ratio, count: "1" };
             void waitForImageGenerationTask(imageConfig, { id: running.storyboardTaskId!, kind: "generation", model: imageConfig.model })
                 .then((result) => {
                     const imageUrl = stableTaskUrl(result.remoteUrl, result.serverUrl, result.dataUrl);
@@ -224,7 +225,7 @@ function DramaProjectEditor({ project }: { project: DramaProject }) {
             storyboardTaskRef.current = `${episode.id}:${nextEnd.id}:creating-end`;
             const prompt = compileDramaShotPrompts(project, episode, nextEnd).endFramePrompt;
             const references = [referenceImage(`storyboard-start-${nextEnd.id}`, `${nextEnd.title}-起始帧.png`, nextEnd.storyboardImageUrl!, "image/png", nextEnd.storyboardImageWidth, nextEnd.storyboardImageHeight)];
-            const imageConfig = { ...config, model: config.imageModel || config.model, imageModel: config.imageModel || config.model, size: dramaGenerationSize(project, prompt, references), count: "1" };
+            const imageConfig = { ...config, model: storyboardImageModel, imageModel: storyboardImageModel, size: dramaGenerationSize(project, prompt, references), count: "1" };
             void createImageGenerationTask(imageConfig, prompt, references, undefined, {
                 logSource: "drama",
                 logTitle: `${project.title} · ${nextEnd.title}尾帧`,
@@ -233,7 +234,7 @@ function DramaProjectEditor({ project }: { project: DramaProject }) {
                 projectId: project.id,
                 episodeId: episode.id,
                 shotId: nextEnd.id,
-                estimatedPoints: estimateTaskPoints(config, "image"),
+                estimatedPoints: estimateTaskPoints(config, "image", 5, storyboardImageModel),
                 attemptNo: nextEnd.storyboardEndAttempt || 1,
                 clientRequestId: `drama-storyboard-end:${project.id}:${episode.id}:${nextEnd.id}:attempt-${nextEnd.storyboardEndAttempt || 1}`,
             })
@@ -255,7 +256,7 @@ function DramaProjectEditor({ project }: { project: DramaProject }) {
         storyboardTaskRef.current = `${episode.id}:${next.id}:creating`;
         const prompts = compileDramaShotPrompts(project, episode, next);
         const references = shotReferenceImages(project, next);
-        const imageConfig = { ...config, model: config.imageModel || config.model, imageModel: config.imageModel || config.model, size: dramaGenerationSize(project, prompts.imagePrompt, references), count: "1" };
+        const imageConfig = { ...config, model: storyboardImageModel, imageModel: storyboardImageModel, size: dramaGenerationSize(project, prompts.imagePrompt, references), count: "1" };
         void createImageGenerationTask(imageConfig, prompts.imagePrompt, references, undefined, {
             logSource: "drama",
             logTitle: `${project.title} · ${next.title}`,
@@ -264,7 +265,7 @@ function DramaProjectEditor({ project }: { project: DramaProject }) {
             projectId: project.id,
             episodeId: episode.id,
             shotId: next.id,
-            estimatedPoints: estimateTaskPoints(config, "image"),
+            estimatedPoints: estimateTaskPoints(config, "image", 5, storyboardImageModel),
             attemptNo: next.storyboardAttempt || 1,
             clientRequestId: `drama-storyboard:${project.id}:${episode.id}:${next.id}:attempt-${next.storyboardAttempt || 1}`,
         })
@@ -277,7 +278,7 @@ function DramaProjectEditor({ project }: { project: DramaProject }) {
             .finally(() => {
                 storyboardTaskRef.current = "";
             });
-    }, [config, episode.id, episode.shots, isCapacityWaiting, project.id, project.ratio, project.title, scheduleCapacityRetry, updateShot]);
+    }, [config, episode.id, episode.shots, isCapacityWaiting, project.id, project.ratio, project.title, scheduleCapacityRetry, storyboardImageModel, updateShot]);
 
     useEffect(() => {
         const running = episode.shots.find((shot) => shot.generationStatus === "running" && shot.generationTaskId);
